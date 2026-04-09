@@ -1,0 +1,5 @@
+streamlit
+snowflake-connector-python
+ollama
+python-dotenv
+openai
