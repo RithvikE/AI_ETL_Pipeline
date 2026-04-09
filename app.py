@@ -5,6 +5,7 @@ import re
 import time
 import csv
 import json
+import subprocess
 from urllib.request import Request, urlopen
 from urllib.parse import urlparse
 from io import StringIO
@@ -503,6 +504,58 @@ def _ingest_api_to_raw(connection, database_name, table_name, columns, records):
             cursor.executemany(insert_sql, rows)
     finally:
         cursor.close()
+
+
+def _write_sql_output_files(folder_path, staging_sql, transform_sql, business_sql):
+    """Write generated SQL output files to target folder."""
+    folder_path.mkdir(parents=True, exist_ok=False)
+    (folder_path / "staging.sql").write_text(staging_sql, encoding="utf-8")
+    (folder_path / "transform.sql").write_text(transform_sql, encoding="utf-8")
+    (folder_path / "business.sql").write_text(business_sql, encoding="utf-8")
+
+
+def _save_outputs_in_github(base_path, output_folder_path):
+    """Commit and push output folder to GitHub main branch."""
+    branch_result = subprocess.run(
+        ["git", "-C", str(base_path), "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    current_branch = (branch_result.stdout or "").strip()
+    if current_branch != "main":
+        raise ValueError(
+            f"Current git branch is '{current_branch}'. Please switch to 'main' before saving outputs in GitHub."
+        )
+
+    relative_output_path = str(output_folder_path.relative_to(base_path))
+    subprocess.run(
+        ["git", "-C", str(base_path), "add", relative_output_path],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    commit_message = f"Add ETL outputs {output_folder_path.name}"
+    commit_result = subprocess.run(
+        ["git", "-C", str(base_path), "commit", "-m", commit_message],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if commit_result.returncode != 0:
+        details = (commit_result.stderr or commit_result.stdout or "").strip()
+        raise ValueError(f"Git commit failed: {details}")
+
+    push_result = subprocess.run(
+        ["git", "-C", str(base_path), "push", "origin", "main"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if push_result.returncode != 0:
+        details = (push_result.stderr or push_result.stdout or "").strip()
+        raise ValueError(f"Git push failed: {details}")
 
 
 def main():
@@ -1218,27 +1271,57 @@ def main():
                 except Exception as e:
                     st.error(f"ETL execution failed: {str(e)}")
         
-        # Save Output button
+        # Save Output buttons
         st.divider()
-        if st.button("Save Output", type="secondary"):
+
+        save_col1, save_col2 = st.columns(2)
+
+        with save_col1:
+            save_local_clicked = st.button("Save Outputs Locally", type="secondary")
+        with save_col2:
+            save_github_clicked = st.button("Save Outputs in GitHub", type="secondary")
+
+        if save_local_clicked:
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 folder_name = f"AI_ETL_Output_{timestamp}"
-                
-                # Create folder
+
                 base_path = Path.cwd()
                 folder_path = base_path / folder_name
-                folder_path.mkdir(parents=True, exist_ok=False)
-                
-                # Write SQL files
-                (folder_path / "staging.sql").write_text(st.session_state.staging_sql, encoding="utf-8")
-                (folder_path / "transform.sql").write_text(st.session_state.transform_sql, encoding="utf-8")
-                (folder_path / "business.sql").write_text(st.session_state.business_sql, encoding="utf-8")
+
+                _write_sql_output_files(
+                    folder_path,
+                    st.session_state.staging_sql,
+                    st.session_state.transform_sql,
+                    st.session_state.business_sql,
+                )
                 
                 st.success(f"✅ SQL files saved successfully to: {folder_path}")
                 
             except Exception as e:
                 st.error(f"Failed to save files: {str(e)}")
+
+        if save_github_clicked:
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                folder_name = f"AI_ETL_Output_{timestamp}"
+
+                base_path = Path.cwd()
+                etl_outputs_root = base_path / "etl_outputs"
+                etl_outputs_root.mkdir(parents=True, exist_ok=True)
+                folder_path = etl_outputs_root / folder_name
+
+                _write_sql_output_files(
+                    folder_path,
+                    st.session_state.staging_sql,
+                    st.session_state.transform_sql,
+                    st.session_state.business_sql,
+                )
+
+                _save_outputs_in_github(base_path, folder_path)
+                st.success(f"✅ SQL files saved and pushed to GitHub: {folder_path}")
+            except Exception as e:
+                st.error(f"Failed to save outputs in GitHub: {str(e)}")
 
     # Close connection at the end
     if connection:
