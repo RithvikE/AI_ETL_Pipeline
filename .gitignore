@@ -4,3 +4,8 @@ AI_ETL_Output_20260408_131254
 AI_ETL_Output_20260403_170620
 AI_ETL_Output_30thMarch_Latest_OpenAI
 AI_ETL_OpenAI_Output_20260319
+config/__pycache__
+execution/__pycache__
+generation/__pycache__
+llm/__pycache__
+snowflake_client/__pycache__
