@@ -1,0 +1,168 @@
+----------------------------------------
+STEP 1: CREATE TABLE
+----------------------------------------
+CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_CUSTOMER
+LIKE AI_ETL.AI_ETL_RAW.CUSTOMER;
+
+----------------------------------------
+STEP 2: INSERT INTO DATALOAD (IF NOT EXISTS)
+----------------------------------------
+INSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
+SELECT 'CUSTOMER', CURRENT_TIMESTAMP()
+WHERE NOT EXISTS (
+    SELECT 1 FROM AI_ETL.AI_ETL_STG.DATALOAD WHERE TABLE_NAME = 'CUSTOMER'
+);
+
+----------------------------------------
+STEP 3: INSERT OVERWRITE WITH WATERMARK (MANDATORY)
+----------------------------------------
+INSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_CUSTOMER
+SELECT *
+FROM AI_ETL.AI_ETL_RAW.CUSTOMER;
+
+----------------------------------------
+STEP 4: UPDATE DATALOAD (MANDATORY)
+----------------------------------------
+UPDATE AI_ETL.AI_ETL_STG.DATALOAD
+SET LAST_LOAD_DATE = (
+    SELECT MAX(LAST_LOAD_DATE)
+    FROM AI_ETL.AI_ETL_STG.DATALOAD
+    WHERE TABLE_NAME = 'CUSTOMER'
+)
+WHERE TABLE_NAME = 'CUSTOMER';
+
+----------------------------------------
+STEP 1: CREATE TABLE
+----------------------------------------
+CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_INVENTORY
+LIKE AI_ETL.AI_ETL_RAW.INVENTORY;
+
+----------------------------------------
+STEP 2: INSERT INTO DATALOAD (IF NOT EXISTS)
+----------------------------------------
+INSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
+SELECT 'INVENTORY', CURRENT_TIMESTAMP()
+WHERE NOT EXISTS (
+    SELECT 1 FROM AI_ETL.AI_ETL_STG.DATALOAD WHERE TABLE_NAME = 'INVENTORY'
+);
+
+----------------------------------------
+STEP 3: INSERT OVERWRITE WITH WATERMARK (MANDATORY)
+----------------------------------------
+INSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_INVENTORY
+SELECT *
+FROM AI_ETL.AI_ETL_RAW.INVENTORY;
+
+----------------------------------------
+STEP 4: UPDATE DATALOAD (MANDATORY)
+----------------------------------------
+UPDATE AI_ETL.AI_ETL_STG.DATALOAD
+SET LAST_LOAD_DATE = (
+    SELECT MAX(LAST_LOAD_DATE)
+    FROM AI_ETL.AI_ETL_STG.DATALOAD
+    WHERE TABLE_NAME = 'INVENTORY'
+)
+WHERE TABLE_NAME = 'INVENTORY';
+
+----------------------------------------
+STEP 1: CREATE TABLE
+----------------------------------------
+CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_ORDERS
+LIKE AI_ETL.AI_ETL_RAW.ORDERS;
+
+----------------------------------------
+STEP 2: INSERT INTO DATALOAD (IF NOT EXISTS)
+----------------------------------------
+INSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
+SELECT 'ORDERS', CURRENT_TIMESTAMP()
+WHERE NOT EXISTS (
+    SELECT 1 FROM AI_ETL.AI_ETL_STG.DATALOAD WHERE TABLE_NAME = 'ORDERS'
+);
+
+----------------------------------------
+STEP 3: INSERT OVERWRITE WITH WATERMARK (MANDATORY)
+----------------------------------------
+INSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_ORDERS
+SELECT *
+FROM AI_ETL.AI_ETL_RAW.ORDERS
+WHERE "DATE" > (
+    SELECT MAX(LAST_LOAD_DATE)
+    FROM AI_ETL.AI_ETL_STG.DATALOAD
+    WHERE TABLE_NAME = 'ORDERS'
+);
+
+----------------------------------------
+STEP 4: UPDATE DATALOAD (MANDATORY)
+----------------------------------------
+UPDATE AI_ETL.AI_ETL_STG.DATALOAD
+SET LAST_LOAD_DATE = (
+    SELECT MAX("DATE")
+    FROM AI_ETL.AI_ETL_STG.STG_ORDERS
+)
+WHERE TABLE_NAME = 'ORDERS';
+
+----------------------------------------
+STEP 1: CREATE TABLE
+----------------------------------------
+CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_PRODUCT
+LIKE AI_ETL.AI_ETL_RAW.PRODUCT;
+
+----------------------------------------
+STEP 2: INSERT INTO DATALOAD (IF NOT EXISTS)
+----------------------------------------
+INSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
+SELECT 'PRODUCT', CURRENT_TIMESTAMP()
+WHERE NOT EXISTS (
+    SELECT 1 FROM AI_ETL.AI_ETL_STG.DATALOAD WHERE TABLE_NAME = 'PRODUCT'
+);
+
+----------------------------------------
+STEP 3: INSERT OVERWRITE WITH WATERMARK (MANDATORY)
+----------------------------------------
+INSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_PRODUCT
+SELECT *
+FROM AI_ETL.AI_ETL_RAW.PRODUCT;
+
+----------------------------------------
+STEP 4: UPDATE DATALOAD (MANDATORY)
+----------------------------------------
+UPDATE AI_ETL.AI_ETL_STG.DATALOAD
+SET LAST_LOAD_DATE = (
+    SELECT MAX(LAST_LOAD_DATE)
+    FROM AI_ETL.AI_ETL_STG.DATALOAD
+    WHERE TABLE_NAME = 'PRODUCT'
+)
+WHERE TABLE_NAME = 'PRODUCT';
+
+----------------------------------------
+STEP 1: CREATE TABLE
+----------------------------------------
+CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_SUPPLIER
+LIKE AI_ETL.AI_ETL_RAW.SUPPLIER;
+
+----------------------------------------
+STEP 2: INSERT INTO DATALOAD (IF NOT EXISTS)
+----------------------------------------
+INSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
+SELECT 'SUPPLIER', CURRENT_TIMESTAMP()
+WHERE NOT EXISTS (
+    SELECT 1 FROM AI_ETL.AI_ETL_STG.DATALOAD WHERE TABLE_NAME = 'SUPPLIER'
+);
+
+----------------------------------------
+STEP 3: INSERT OVERWRITE WITH WATERMARK (MANDATORY)
+----------------------------------------
+INSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_SUPPLIER
+SELECT *
+FROM AI_ETL.AI_ETL_RAW.SUPPLIER;
+
+----------------------------------------
+STEP 4: UPDATE DATALOAD (MANDATORY)
+----------------------------------------
+UPDATE AI_ETL.AI_ETL_STG.DATALOAD
+SET LAST_LOAD_DATE = (
+    SELECT MAX(LAST_LOAD_DATE)
+    FROM AI_ETL.AI_ETL_STG.DATALOAD
+    WHERE TABLE_NAME = 'SUPPLIER'
+)
+WHERE TABLE_NAME = 'SUPPLIER';
