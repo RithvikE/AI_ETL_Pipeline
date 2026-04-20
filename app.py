@@ -1,561 +1,41 @@
 """Streamlit entry point"""
 
 import streamlit as st
-import re
 import time
-import csv
-import json
 import subprocess
-from urllib.request import Request, urlopen
-from urllib.parse import urlparse
-from io import StringIO
+import tempfile
+import os
+import difflib
 from datetime import datetime
 from pathlib import Path
 from config.settings import get_ollama_config
 from snowflake_client.connection import get_connection
+from snowflake_client.discovery import (
+    fetch_databases,
+    fetch_schemas_for_db,
+    fetch_tables_for_db_schema,
+)
 from snowflake_client.validator import validate_tables
 from snowflake_client.schema_fetcher import fetch_schemas, list_tables
+from ingestion.source_ingestion import (
+    extract_csv_schema,
+    build_api_ingestion_script,
+    ingest_records_to_raw,
+)
 from llm.prompt_builder import build_prompt
 from llm.ollama_client import generate, list_ollama_models
+from llm.model_utils import normalize_model_name, candidate_model_names
+from llm.chat_utils import (
+    build_sql_chat_prompt,
+    build_validation_prompt,
+    parse_validation_response,
+)
 from generation.sql_generator import extract_sql
 from execution.sql_executor import execute_sql_statements
-
-
-def fetch_databases(connection):
-    """Fetch list of databases from Snowflake."""
-    cursor = connection.cursor()
-    try:
-        cursor.execute("SHOW DATABASES")
-        results = cursor.fetchall()
-        return [row[1] for row in results]
-    finally:
-        cursor.close()
-
-
-def fetch_schemas_for_db(connection, database):
-    """Fetch list of schemas for a specific database."""
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"SHOW SCHEMAS IN DATABASE {database}")
-        results = cursor.fetchall()
-        return [row[1] for row in results]
-    finally:
-        cursor.close()
-
-
-def fetch_tables_for_db_schema(connection, database, schema):
-    """Fetch table list for a specific database and schema."""
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"USE DATABASE {database}")
-        cursor.execute(f"USE SCHEMA {database}.{schema}")
-        return list_tables(connection)
-    finally:
-        cursor.close()
-
-
-def _normalize_model_name(model_name):
-    """Normalize Ollama model name for reliable matching."""
-    return (model_name or "").strip().lower()
-
-
-def _candidate_model_names(model_name):
-    """Return acceptable aliases for a configured model name."""
-    normalized = _normalize_model_name(model_name)
-    if not normalized:
-        return set()
-
-    candidates = {normalized}
-    if ":" in normalized:
-        candidates.add(normalized.split(":", 1)[0])
-    else:
-        candidates.add(f"{normalized}:latest")
-
-    return candidates
-
-
-def _group_tables_by_db_schema(qualified_tables):
-    """Group fully-qualified table names by (database, schema)."""
-    grouped = {}
-    for qualified_name in qualified_tables:
-        parts = qualified_name.split(".", 2)
-        if len(parts) != 3:
-            continue
-
-        database, schema, table = parts[0], parts[1], parts[2]
-        key = (database, schema)
-        grouped.setdefault(key, []).append(table)
-
-    return grouped
-
-
-def _build_sql_chat_prompt(user_message, staging_sql, transform_sql, business_sql):
-    """Build chatbot prompt with generated SQL context."""
-    return f"""You are an SQL assistant helping users understand generated Snowflake ETL SQL.
-
-Use the SQL context below to answer the user question clearly and accurately.
-
-STAGING SQL:
-{staging_sql}
-
-TRANSFORM SQL:
-{transform_sql}
-
-BUSINESS SQL:
-{business_sql}
-
-USER QUESTION:
-{user_message}
-
-Answer directly and concisely based on the SQL above.
-"""
-
-
-def _build_validation_prompt(requirement, table_schemas, staging_sql, transform_sql, business_sql):
-    """Build prompt for LLM-based SQL validation scoring."""
-    schema_lines = []
-    for table_name, columns in table_schemas.items():
-        cols = ", ".join(f"{col['column_name']} ({col['data_type']})" for col in columns)
-        schema_lines.append(f"- {table_name}: {cols}")
-
-    schema_text = "\n".join(schema_lines)
-
-    return f"""You are a strict SQL validator for Snowflake ETL.
-
-Validate the generated SQL against the user requirement and source schemas.
-
-You MUST evaluate:
-1) Requirement coverage accuracy
-2) Relevant columns coverage
-3) KPI/metric coverage
-4) Layer dependency correctness (STG -> WI -> BR)
-5) SQL completeness (expected CREATE/MERGE/INSERT patterns)
-
-Return ONLY valid JSON (no markdown, no extra text) using this exact schema:
-{{
-  "score": <integer 0-100>,
-  "summary": "<short summary>",
-  "checks": [
-    {{"name": "Requirement Coverage", "status": "PASS|PARTIAL|FAIL", "details": "..."}},
-    {{"name": "Relevant Columns Coverage", "status": "PASS|PARTIAL|FAIL", "details": "..."}},
-    {{"name": "KPI Coverage", "status": "PASS|PARTIAL|FAIL", "details": "..."}},
-    {{"name": "Layer Dependency Integrity", "status": "PASS|PARTIAL|FAIL", "details": "..."}},
-    {{"name": "SQL Completeness", "status": "PASS|PARTIAL|FAIL", "details": "..."}}
-  ],
-  "missing_items": ["..."]
-}}
-
-USER REQUIREMENT:
-{requirement}
-
-SOURCE SCHEMAS:
-{schema_text}
-
-STAGING SQL:
-{staging_sql}
-
-TRANSFORM SQL:
-{transform_sql}
-
-BUSINESS SQL:
-{business_sql}
-"""
-
-
-def _parse_validation_response(raw_text):
-    """Parse validation JSON from LLM response with fallback."""
-    try:
-        parsed = json.loads(raw_text)
-    except Exception:
-        match = re.search(r"\{[\s\S]*\}", raw_text or "")
-        if not match:
-            return {
-                "score": 0,
-                "summary": "Validation parser could not read structured response.",
-                "checks": [{
-                    "name": "Validation Output Format",
-                    "status": "FAIL",
-                    "details": "LLM did not return parseable JSON format.",
-                }],
-                "missing_items": [],
-            }
-        try:
-            parsed = json.loads(match.group(0))
-        except Exception:
-            return {
-                "score": 0,
-                "summary": "Validation parser could not read structured response.",
-                "checks": [{
-                    "name": "Validation Output Format",
-                    "status": "FAIL",
-                    "details": "LLM did not return parseable JSON format.",
-                }],
-                "missing_items": [],
-            }
-
-    score = parsed.get("score", 0)
-    try:
-        score = int(score)
-    except Exception:
-        score = 0
-    score = max(0, min(100, score))
-
-    checks = parsed.get("checks") if isinstance(parsed.get("checks"), list) else []
-    normalized_checks = []
-    for check in checks:
-        if not isinstance(check, dict):
-            continue
-        normalized_checks.append({
-            "name": str(check.get("name", "Unnamed Check")),
-            "status": str(check.get("status", "PARTIAL")).upper(),
-            "details": str(check.get("details", "")),
-        })
-
-    missing_items = parsed.get("missing_items") if isinstance(parsed.get("missing_items"), list) else []
-    missing_items = [str(item) for item in missing_items]
-
-    return {
-        "score": score,
-        "summary": str(parsed.get("summary", "Validation complete.")),
-        "checks": normalized_checks,
-        "missing_items": missing_items,
-    }
-
-
-def _to_sql_identifier(name):
-    """Convert arbitrary text into a Snowflake-friendly identifier token."""
-    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", (name or "").strip())
-    cleaned = cleaned.strip("_")
-    return (cleaned or "CSV_TABLE").upper()
-
-
-def _infer_csv_data_type(values):
-    """Infer a simple Snowflake data type from sampled CSV values."""
-    non_empty = [v.strip() for v in values if v is not None and str(v).strip() != ""]
-    if not non_empty:
-        return "VARCHAR"
-
-    lower_values = [v.lower() for v in non_empty]
-    if all(v in {"true", "false", "0", "1", "yes", "no", "y", "n"} for v in lower_values):
-        return "BOOLEAN"
-
-    try:
-        for v in non_empty:
-            int(v)
-        return "NUMBER"
-    except ValueError:
-        pass
-
-    try:
-        for v in non_empty:
-            float(v)
-        return "FLOAT"
-    except ValueError:
-        pass
-
-    date_formats = ["%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d"]
-    for fmt in date_formats:
-        try:
-            for v in non_empty:
-                datetime.strptime(v, fmt)
-            return "DATE"
-        except ValueError:
-            continue
-
-    datetime_formats = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M:%S.%f",
-        "%d-%m-%Y %H:%M:%S",
-    ]
-    for fmt in datetime_formats:
-        try:
-            for v in non_empty:
-                datetime.strptime(v, fmt)
-            return "TIMESTAMP_NTZ"
-        except ValueError:
-            continue
-
-    return "VARCHAR"
-
-
-def _extract_csv_schema(uploaded_file, sample_rows=200, custom_table_name=None):
-    """Return target raw table name, inferred columns, and normalized records from CSV file."""
-    if not uploaded_file.name.lower().endswith(".csv"):
-        raise ValueError("Only .csv files are supported")
-
-    raw_bytes = uploaded_file.getvalue()
-    if not raw_bytes:
-        raise ValueError("CSV file is empty")
-
-    content = raw_bytes.decode("utf-8-sig", errors="replace")
-    reader = csv.DictReader(StringIO(content))
-
-    if not reader.fieldnames:
-        raise ValueError("CSV file must include a header row")
-
-    if any((name is None) or (str(name).strip() == "") for name in reader.fieldnames):
-        raise ValueError("CSV header contains empty column names")
-
-    normalized_columns = [_to_sql_identifier(col) for col in reader.fieldnames]
-    duplicate_columns = sorted({
-        col for col in normalized_columns if normalized_columns.count(col) > 1
-    })
-    if duplicate_columns:
-        raise ValueError(
-            "CSV contains duplicate column names after normalization: "
-            + ", ".join(duplicate_columns)
-        )
-
-    samples_by_col = {col: [] for col in normalized_columns}
-    has_data_rows = False
-    normalized_records = []
-
-    for idx, row in enumerate(reader):
-        has_data_rows = True
-        normalized_row = {}
-        for original_col, normalized_col in zip(reader.fieldnames, normalized_columns):
-            value = row.get(original_col, "")
-            normalized_row[normalized_col] = value
-            if idx < sample_rows:
-                samples_by_col[normalized_col].append(value)
-        normalized_records.append(normalized_row)
-
-    if not has_data_rows:
-        raise ValueError("CSV must contain at least one data row")
-
-    columns = [
-        {
-            "column_name": col,
-            "data_type": _infer_csv_data_type(samples_by_col[col]),
-        }
-        for col in normalized_columns
-    ]
-
-    if not columns:
-        raise ValueError("CSV schema inference failed: no columns detected")
-
-    preferred_name = (custom_table_name or "").strip()
-    if preferred_name:
-        table_base_name = _to_sql_identifier(preferred_name)
-    else:
-        table_base_name = _to_sql_identifier(Path(uploaded_file.name).stem)
-
-    table_name = f"CSV_{table_base_name}"
-    return table_name, columns, normalized_records
-
-
-def _normalize_api_records(payload):
-    """Normalize common API JSON payloads into a list of record dicts."""
-    if isinstance(payload, list):
-        if all(isinstance(item, dict) for item in payload):
-            return payload
-        raise ValueError("API response list must contain JSON objects")
-
-    if isinstance(payload, dict):
-        list_candidates = [
-            value for value in payload.values()
-            if isinstance(value, list) and all(isinstance(item, dict) for item in value)
-        ]
-        if list_candidates:
-            return list_candidates[0]
-        return [payload]
-
-    raise ValueError("Unsupported API response format. Expected JSON object or list of objects.")
-
-
-def _infer_api_table_name(api_url):
-    """Infer Snowflake raw table name from API URL path."""
-    parsed = urlparse(api_url)
-    path_name = Path(parsed.path or "").name
-    base_name = _to_sql_identifier(Path(path_name).stem or "API_SOURCE")
-    return f"API_{base_name}"
-
-
-def _build_api_ingestion_script(api_url, selected_database):
-    """Build preview Python script for API fetch and Snowflake raw ingestion."""
-    target_table = _infer_api_table_name(api_url)
-    database_name = selected_database or "<DATABASE>"
-
-    return f'''import json
-from urllib.request import Request, urlopen
-from snowflake.connector import connect
-
-
-def fetch_api_payload(api_url, api_token):
-    request = Request(api_url)
-    request.add_header("Authorization", f"Bearer {{api_token}}")
-    request.add_header("Accept", "application/json")
-    with urlopen(request, timeout=60) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        body = response.read().decode(charset, errors="replace")
-    return json.loads(body)
-
-
-# Replace with your runtime values
-API_URL = "{api_url}"
-API_TOKEN = "<API_TOKEN>"
-TARGET_DATABASE = "{database_name}"
-TARGET_SCHEMA = "AI_ETL_RAW"
-TARGET_TABLE = "{target_table}"
-
-payload = fetch_api_payload(API_URL, API_TOKEN)
-
-# Normalize payload records, infer columns/types, create table,
-# and insert rows into: TARGET_DATABASE.AI_ETL_RAW.TARGET_TABLE
-# (This app executes this logic when you click 'Fetch and Ingest API Source')
-'''
-
-
-def _infer_api_columns(records):
-    """Infer table columns and SQL types from normalized API records."""
-    all_keys = []
-    for record in records:
-        for key in record.keys():
-            normalized = _to_sql_identifier(key)
-            if normalized not in all_keys:
-                all_keys.append(normalized)
-
-    if not all_keys:
-        raise ValueError("API response records do not contain columns")
-
-    samples_by_col = {col: [] for col in all_keys}
-    for record in records[:200]:
-        normalized_record = {
-            _to_sql_identifier(k): v for k, v in record.items()
-        }
-        for col in all_keys:
-            raw_val = normalized_record.get(col)
-            if raw_val is None:
-                samples_by_col[col].append("")
-            elif isinstance(raw_val, (dict, list)):
-                samples_by_col[col].append(json.dumps(raw_val, ensure_ascii=True))
-            else:
-                samples_by_col[col].append(str(raw_val))
-
-    columns = []
-    for col in all_keys:
-        inferred = _infer_csv_data_type(samples_by_col[col])
-        if inferred in {"DATE", "TIMESTAMP_NTZ"}:
-            inferred = "VARCHAR"
-        columns.append({"column_name": col, "data_type": inferred})
-
-    return columns
-
-
-def _cast_value_for_sql(raw_val, data_type):
-    """Cast API value into Python value compatible with Snowflake bindings."""
-    if raw_val is None:
-        return None
-
-    if isinstance(raw_val, (dict, list)):
-        raw_val = json.dumps(raw_val, ensure_ascii=True)
-
-    if data_type == "BOOLEAN":
-        val = str(raw_val).strip().lower()
-        if val in {"true", "1", "yes", "y"}:
-            return True
-        if val in {"false", "0", "no", "n"}:
-            return False
-        return None
-
-    if data_type == "NUMBER":
-        try:
-            return int(str(raw_val).strip())
-        except Exception:
-            return None
-
-    if data_type == "FLOAT":
-        try:
-            return float(str(raw_val).strip())
-        except Exception:
-            return None
-
-    return str(raw_val)
-
-
-def _ingest_api_to_raw(connection, database_name, table_name, columns, records):
-    """Create/replace AI_ETL_RAW table and ingest API records into Snowflake."""
-    cursor = connection.cursor()
-    try:
-        cursor.execute(f"USE DATABASE {database_name}")
-        cursor.execute(f"USE SCHEMA {database_name}.AI_ETL_RAW")
-
-        column_defs = ", ".join(
-            f"{col['column_name']} {col['data_type']}" for col in columns
-        )
-        cursor.execute(f"CREATE OR REPLACE TABLE {database_name}.AI_ETL_RAW.{table_name} ({column_defs})")
-
-        column_names = [col["column_name"] for col in columns]
-        placeholders = ", ".join(["%s"] * len(column_names))
-        insert_sql = (
-            f"INSERT INTO {database_name}.AI_ETL_RAW.{table_name} "
-            f"({', '.join(column_names)}) VALUES ({placeholders})"
-        )
-
-        rows = []
-        for record in records:
-            normalized_record = {_to_sql_identifier(k): v for k, v in record.items()}
-            row = []
-            for col in columns:
-                row.append(_cast_value_for_sql(normalized_record.get(col["column_name"]), col["data_type"]))
-            rows.append(tuple(row))
-
-        if rows:
-            cursor.executemany(insert_sql, rows)
-    finally:
-        cursor.close()
-
-
-def _write_sql_output_files(folder_path, staging_sql, transform_sql, business_sql):
-    """Write generated SQL output files to target folder."""
-    folder_path.mkdir(parents=True, exist_ok=False)
-    (folder_path / "staging.sql").write_text(staging_sql, encoding="utf-8")
-    (folder_path / "transform.sql").write_text(transform_sql, encoding="utf-8")
-    (folder_path / "business.sql").write_text(business_sql, encoding="utf-8")
-
-
-def _save_outputs_in_github(base_path, output_folder_path):
-    """Commit and push output folder to GitHub main branch."""
-    branch_result = subprocess.run(
-        ["git", "-C", str(base_path), "branch", "--show-current"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    current_branch = (branch_result.stdout or "").strip()
-    if current_branch != "main":
-        raise ValueError(
-            f"Current git branch is '{current_branch}'. Please switch to 'main' before saving outputs in GitHub."
-        )
-
-    relative_output_path = str(output_folder_path.relative_to(base_path))
-    subprocess.run(
-        ["git", "-C", str(base_path), "add", relative_output_path],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    commit_message = f"Add ETL outputs {output_folder_path.name}"
-    commit_result = subprocess.run(
-        ["git", "-C", str(base_path), "commit", "-m", commit_message],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if commit_result.returncode != 0:
-        details = (commit_result.stderr or commit_result.stdout or "").strip()
-        raise ValueError(f"Git commit failed: {details}")
-
-    push_result = subprocess.run(
-        ["git", "-C", str(base_path), "push", "origin", "main"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if push_result.returncode != 0:
-        details = (push_result.stderr or push_result.stdout or "").strip()
-        raise ValueError(f"Git push failed: {details}")
+from utils.table_utils import group_tables_by_db_schema
+from utils.output_manager import write_sql_output_files, save_outputs_in_github
+from self_healing.registry import list_pipelines, load_pipeline, save_pipeline
+from self_healing.drift_detector import detect_schema_drift
 
 
 def main():
@@ -675,6 +155,374 @@ def main():
     if not st.session_state.get("snowflake_connected"):
         st.info("ℹ️ Please connect to Snowflake to continue.")
         return
+
+    st.markdown("## Self-Healing Pipelines")
+    try:
+        saved_pipelines = list_pipelines()
+    except Exception as e:
+        st.error(f"Failed to load saved pipelines: {str(e)}")
+        saved_pipelines = []
+
+    if not saved_pipelines:
+        st.info("No saved pipelines found. Generate a pipeline first.")
+    else:
+        pipeline_ids = [pipeline.get("pipeline_id", "") for pipeline in saved_pipelines]
+        selected_pipeline_id = st.selectbox(
+            "Select Existing Pipeline",
+            options=pipeline_ids,
+            key="self_healing_selected_pipeline",
+        )
+
+        if selected_pipeline_id:
+            try:
+                selected_pipeline = load_pipeline(selected_pipeline_id)
+                with st.expander("Pipeline Details", expanded=False):
+                    st.markdown("**Requirement:**")
+                    st.write(selected_pipeline.get("requirement", ""))
+
+                    st.markdown("**Source Tables:**")
+                    for table_name in selected_pipeline.get("source_tables", []):
+                        st.write(table_name)
+
+                    st.markdown("**Last Updated:**")
+                    st.write(selected_pipeline.get("last_updated", ""))
+            except Exception as e:
+                st.error(f"Failed to load selected pipeline: {str(e)}")
+
+            if st.button("Check for Schema Drift", type="secondary", key="check_schema_drift_btn"):
+                try:
+                    pipeline_for_drift = load_pipeline(selected_pipeline_id)
+                except Exception:
+                    st.error("Failed to load pipeline.")
+                else:
+                    old_schema = pipeline_for_drift.get("schema_snapshot", {})
+                    source_tables = pipeline_for_drift.get("source_tables", [])
+                    new_schema = {}
+                    schema_connection = None
+
+                    try:
+                        schema_connection = get_connection(st.session_state.snowflake_config)
+                        table_groups = group_tables_by_db_schema(source_tables)
+
+                        for (database_name, schema_name), table_names in table_groups.items():
+                            cursor = schema_connection.cursor()
+                            try:
+                                cursor.execute(f"USE DATABASE {database_name}")
+                                cursor.execute(f"USE SCHEMA {database_name}.{schema_name}")
+                            finally:
+                                cursor.close()
+
+                            grouped_schemas = fetch_schemas(schema_connection, table_names)
+                            for table_name, columns in grouped_schemas.items():
+                                qualified_table = f"{database_name}.{schema_name}.{table_name}"
+                                new_schema[qualified_table] = columns
+                    except Exception:
+                        st.error("Failed to fetch latest schema.")
+                    else:
+                        drift_result = detect_schema_drift(old_schema, new_schema)
+                        if not drift_result.get("has_drift", False):
+                            st.success("No schema drift detected.")
+                        else:
+                            st.warning("Schema drift detected.")
+                            for table_name, changes in drift_result.get("tables", {}).items():
+                                st.markdown(f"**Table: {table_name}**")
+
+                                added_columns = changes.get("added", [])
+                                if added_columns:
+                                    st.markdown("**Added Columns:**")
+                                    for col in added_columns:
+                                        st.write(f"- {col.get('column_name', '')} ({col.get('data_type', '')})")
+
+                                removed_columns = changes.get("removed", [])
+                                if removed_columns:
+                                    st.markdown("**Removed Columns:**")
+                                    for col in removed_columns:
+                                        st.write(f"- {col.get('column_name', '')} ({col.get('data_type', '')})")
+
+                                modified_columns = changes.get("modified", [])
+                                if modified_columns:
+                                    st.markdown("**Modified Columns:**")
+                                    for col in modified_columns:
+                                        st.write(
+                                            f"- {col.get('column_name', '')} "
+                                            f"({col.get('old_type', '')} -> {col.get('new_type', '')})"
+                                        )
+
+                                st.write("")
+
+                            saved_requirement = pipeline_for_drift.get("requirement", "")
+                            if not saved_requirement or not str(saved_requirement).strip():
+                                st.error("Pipeline requirement not found.")
+                            else:
+                                try:
+                                    regeneration_prompt = build_prompt(
+                                        saved_requirement,
+                                        new_schema,
+                                        None,
+                                        None,
+                                    )
+                                    regenerated_response = generate(
+                                        regeneration_prompt,
+                                        provider="openai",
+                                    )
+                                    regenerated_sections = extract_sql(regenerated_response)
+
+                                    st.session_state.regenerated_staging_sql = regenerated_sections["staging"]
+                                    st.session_state.regenerated_transform_sql = regenerated_sections["transform"]
+                                    st.session_state.regenerated_business_sql = regenerated_sections["business"]
+                                    st.session_state.old_saved_sql = pipeline_for_drift.get("sql", {})
+                                    st.session_state.drift_result = drift_result
+                                    st.session_state.regenerated_schema_snapshot = new_schema
+
+                                    st.success("Updated SQL regenerated successfully.")
+                                except Exception:
+                                    st.error("SQL regeneration failed.")
+                                    st.error("Failed to regenerate SQL.")
+                    finally:
+                        if schema_connection:
+                            try:
+                                schema_connection.close()
+                            except Exception:
+                                pass
+
+            regenerated_keys = [
+                "regenerated_staging_sql",
+                "regenerated_transform_sql",
+                "regenerated_business_sql",
+            ]
+            if all(key in st.session_state for key in regenerated_keys):
+                old_saved_sql = st.session_state.get("old_saved_sql")
+                if not isinstance(old_saved_sql, dict) or not old_saved_sql:
+                    st.error("Previous SQL not found.")
+                else:
+                    st.markdown("### SQL Changes Detected")
+
+                    diff_pairs = [
+                        (
+                            "Staging SQL Diff",
+                            "Staging",
+                            str(old_saved_sql.get("staging", "")),
+                            str(st.session_state.get("regenerated_staging_sql", "")),
+                        ),
+                        (
+                            "Transform SQL Diff",
+                            "Transform",
+                            str(old_saved_sql.get("transform", "")),
+                            str(st.session_state.get("regenerated_transform_sql", "")),
+                        ),
+                        (
+                            "Business SQL Diff",
+                            "Business",
+                            str(old_saved_sql.get("business", "")),
+                            str(st.session_state.get("regenerated_business_sql", "")),
+                        ),
+                    ]
+
+                    diff_summaries = []
+                    for title, layer_name, old_sql, new_sql in diff_pairs:
+                        with st.expander(title, expanded=False):
+                            diff_lines = list(
+                                difflib.unified_diff(
+                                    old_sql.splitlines(),
+                                    new_sql.splitlines(),
+                                    fromfile="old",
+                                    tofile="new",
+                                    lineterm="",
+                                )
+                            )
+                            if diff_lines:
+                                st.code("\n".join(diff_lines), language="diff")
+                            else:
+                                st.write("No changes detected.")
+
+                        added_count = 0
+                        removed_count = 0
+                        for line in diff_lines:
+                            if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+                                continue
+                            if line.startswith("+"):
+                                added_count += 1
+                            elif line.startswith("-"):
+                                removed_count += 1
+
+                        diff_summaries.append((layer_name, added_count, removed_count))
+
+                    st.markdown("#### High-Level Changes")
+                    for layer_name, added_count, removed_count in diff_summaries:
+                        if added_count == 0 and removed_count == 0:
+                            st.write(f"{layer_name}: No changes detected.")
+                        else:
+                            st.write(f"{layer_name}:")
+                            st.write(f"--- {removed_count} line(s) removed/changed")
+                            st.write(f"+++ {added_count} line(s) added/updated")
+
+                    accept_col, ignore_col = st.columns(2)
+                    with accept_col:
+                        accept_clicked = st.button("Accept Changes", type="primary", key="accept_regenerated_changes")
+                    with ignore_col:
+                        ignore_clicked = st.button("Ignore", type="secondary", key="ignore_regenerated_changes")
+
+                    if accept_clicked:
+                        regenerated_staging_sql = st.session_state.get("regenerated_staging_sql")
+                        regenerated_transform_sql = st.session_state.get("regenerated_transform_sql")
+                        regenerated_business_sql = st.session_state.get("regenerated_business_sql")
+
+                        if not all([
+                            regenerated_staging_sql,
+                            regenerated_transform_sql,
+                            regenerated_business_sql,
+                        ]):
+                            st.warning("Regenerated SQL is missing. Cannot export or push changes.")
+                        else:
+                            pipeline_id_to_update = selected_pipeline_id
+                            pipeline_updated = False
+
+                            try:
+                                pipeline_to_update = load_pipeline(selected_pipeline_id)
+                                pipeline_id_to_update = pipeline_to_update.get("pipeline_id", selected_pipeline_id)
+                                save_pipeline(
+                                    pipeline_id=pipeline_id_to_update,
+                                    requirement=pipeline_to_update.get("requirement", ""),
+                                    source_tables=pipeline_to_update.get("source_tables", []),
+                                    schema_snapshot=st.session_state.get(
+                                        "regenerated_schema_snapshot",
+                                        pipeline_to_update.get("schema_snapshot", {}),
+                                    ),
+                                    staging_sql=regenerated_staging_sql,
+                                    transform_sql=regenerated_transform_sql,
+                                    business_sql=regenerated_business_sql,
+                                )
+                                pipeline_updated = True
+                            except Exception:
+                                st.error("Failed to update pipeline.")
+
+                            if pipeline_updated:
+                                export_succeeded = False
+                                try:
+                                    output_folder = Path.cwd() / "etl_outputs" / str(pipeline_id_to_update)
+                                    output_folder.mkdir(parents=True, exist_ok=True)
+                                    (output_folder / "staging.sql").write_text(regenerated_staging_sql, encoding="utf-8")
+                                    (output_folder / "transform.sql").write_text(regenerated_transform_sql, encoding="utf-8")
+                                    (output_folder / "business.sql").write_text(regenerated_business_sql, encoding="utf-8")
+                                    export_succeeded = True
+                                except Exception as e:
+                                    st.warning("Pipeline updated, but SQL export failed.")
+                                    st.error(f"SQL export error: {str(e)}")
+
+                                if export_succeeded:
+                                    try:
+                                        subprocess.run(
+                                            ["git", "--version"],
+                                            capture_output=True,
+                                            text=True,
+                                            check=True,
+                                        )
+                                    except FileNotFoundError:
+                                        st.warning("Git is not available.")
+                                    except Exception:
+                                        st.warning("Git is not available.")
+                                    else:
+                                        repo_check = subprocess.run(
+                                            ["git", "-C", str(Path.cwd()), "rev-parse", "--is-inside-work-tree"],
+                                            capture_output=True,
+                                            text=True,
+                                            check=False,
+                                        )
+
+                                        if repo_check.returncode != 0:
+                                            st.warning("Pipeline updated and SQL exported, but Git repository is not initialized.")
+                                        else:
+                                            pipeline_json_path = os.path.join(
+                                                "self_healing",
+                                                "storage",
+                                                f"{pipeline_id_to_update}.json",
+                                            )
+                                            pipeline_sql_folder_path = os.path.join(
+                                                "etl_outputs",
+                                                str(pipeline_id_to_update),
+                                            )
+
+                                            git_add_json = subprocess.run(
+                                                ["git", "-C", str(Path.cwd()), "add", pipeline_json_path],
+                                                capture_output=True,
+                                                text=True,
+                                                check=False,
+                                            )
+                                            git_add_sql = subprocess.run(
+                                                ["git", "-C", str(Path.cwd()), "add", pipeline_sql_folder_path],
+                                                capture_output=True,
+                                                text=True,
+                                                check=False,
+                                            )
+
+                                            if git_add_json.returncode != 0 or git_add_sql.returncode != 0:
+                                                details = (
+                                                    git_add_json.stderr
+                                                    or git_add_sql.stderr
+                                                    or git_add_json.stdout
+                                                    or git_add_sql.stdout
+                                                    or "Failed to stage files."
+                                                ).strip()
+                                                st.warning("Pipeline updated and SQL exported, but Git push failed.")
+                                                st.error(details)
+                                            else:
+                                                commit_message = f"[Auto-Heal] {pipeline_id_to_update} schema drift updated"
+                                                git_commit = subprocess.run(
+                                                    [
+                                                        "git",
+                                                        "-C",
+                                                        str(Path.cwd()),
+                                                        "commit",
+                                                        "-m",
+                                                        commit_message,
+                                                    ],
+                                                    capture_output=True,
+                                                    text=True,
+                                                    check=False,
+                                                )
+
+                                                if git_commit.returncode != 0:
+                                                    commit_output = (git_commit.stderr or git_commit.stdout or "").strip()
+                                                    if "nothing to commit" in commit_output.lower():
+                                                        git_push = subprocess.run(
+                                                            ["git", "-C", str(Path.cwd()), "push", "origin", "main"],
+                                                            capture_output=True,
+                                                            text=True,
+                                                            check=False,
+                                                        )
+                                                        if git_push.returncode != 0:
+                                                            details = (git_push.stderr or git_push.stdout or "Git push failed.").strip()
+                                                            st.warning("Pipeline updated and SQL exported, but Git push failed.")
+                                                            st.error(details)
+                                                        else:
+                                                            st.success("Pipeline updated and pushed to GitHub successfully.")
+                                                    else:
+                                                        st.warning("Pipeline updated and SQL exported, but Git push failed.")
+                                                        st.error(commit_output)
+                                                else:
+                                                    git_push = subprocess.run(
+                                                        ["git", "-C", str(Path.cwd()), "push", "origin", "main"],
+                                                        capture_output=True,
+                                                        text=True,
+                                                        check=False,
+                                                    )
+                                                    if git_push.returncode != 0:
+                                                        details = (git_push.stderr or git_push.stdout or "Git push failed.").strip()
+                                                        st.warning("Pipeline updated and SQL exported, but Git push failed.")
+                                                        st.error(details)
+                                                    else:
+                                                        st.success("Pipeline updated and pushed to GitHub successfully.")
+
+                    if ignore_clicked:
+                        st.session_state.pop("regenerated_staging_sql", None)
+                        st.session_state.pop("regenerated_transform_sql", None)
+                        st.session_state.pop("regenerated_business_sql", None)
+                        st.session_state.pop("drift_result", None)
+                        st.session_state.pop("old_saved_sql", None)
+                        st.session_state.pop("regenerated_schema_snapshot", None)
+                        st.info("Changes discarded.")
+
+    st.divider()
     
     # ETL Requirements input
     st.subheader("ETL Requirements")
@@ -697,9 +545,9 @@ def main():
                 st.error(model_error)
             else:
                 normalized_installed = {
-                    _normalize_model_name(model) for model in installed_models
+                    normalize_model_name(model) for model in installed_models
                 }
-                configured_candidates = _candidate_model_names(ollama_model)
+                configured_candidates = candidate_model_names(ollama_model)
 
                 if configured_candidates.intersection(normalized_installed):
                     st.success(f"✅ Required Ollama model is available: {ollama_model}")
@@ -717,6 +565,126 @@ def main():
         height=200,
         placeholder="Provide your details here"
     )
+
+    @st.dialog("Prompt Guidelines")
+    def show_prompt_guidelines_dialog():
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "Core Structure",
+            "Join & Dedup Rules",
+            "KPI & Metrics",
+            "Quality Checklist",
+        ])
+
+        with tab1:
+            st.markdown("""
+Write prompts using clear sections. Include all items below:
+
+1. BUSINESS OBJECTIVE
+- State what business outcome should be optimized.
+- Keep objective specific and measurable.
+
+2. TARGET DATA GRAIN
+- Define exactly one row per key (single key or composite key).
+- Use explicit key format such as SALES_ORDER_NO + PRODUCTID + SUPPLIERID.
+
+3. MERGE KEY
+- Declare merge key explicitly.
+- Ensure merge key matches target grain exactly.
+
+4. FINAL DATASET REQUIREMENT
+- Require exactly one row per merge key after all joins.
+- Require final deduplication step after full transformation.
+
+5. OUTPUT EXPECTATIONS
+- Ask for complete executable SQL only.
+- Avoid placeholders and avoid incomplete sections.
+""")
+
+        with tab2:
+            st.markdown("""
+Define join behavior and dedup logic before KPIs.
+
+1. JOIN RULES
+- Identify base table.
+- For each joined table, specify cardinality (1-to-1 or 1-to-many).
+- For 1-to-many tables, require latest-record selection and key used.
+
+2. DEDUPLICATION RULES
+- Declare dedup keys for each source table.
+- Declare ordering column for latest record logic.
+- Require that joins must not increase row count beyond target grain.
+
+3. SAFE TRANSFORM PATTERN
+- Require final ROW_NUMBER based dedup over merge key.
+- Require filtering to one record per merge key.
+
+4. DATA TYPE AND DATE HANDLING
+- If date formats vary, request explicit parsing/conversion logic.
+""")
+
+        with tab3:
+            st.markdown("""
+Define KPI formulas explicitly so LLM cannot guess.
+
+Guidelines:
+- Provide KPI name.
+- Provide exact formula expression.
+- Provide denominator safety expectation where relevant.
+- Mention required columns for each KPI.
+
+Recommended KPI format:
+- KPI_NAME: <exact formula>
+
+Example style:
+- OTIF_FLAG: CASE WHEN ON_TIME_DELIVERY = TRUE AND ACCURATE_ORDER = TRUE THEN 1 ELSE 0
+- LANDED_COST_PER_UNIT: UNIT_PRICE + SHIPPING_COST + INVENTORY_SERVICE_COSTS + STORAGE_COST
+- GMROI: ((FINAL_PRICE - UNIT_PRICE) * SALES_QUANTITY) / (UNIT_PRICE * INVENTORY_UNITS)
+""")
+
+        with tab4:
+            st.markdown("""
+Before clicking Generate, check prompt quality:
+
+- Objective is clear and domain-specific.
+- Grain and merge key are explicitly defined and aligned.
+- Join rules identify all many-side tables and latest-record logic.
+- Dedup rules are present for every table that can duplicate rows.
+- KPI definitions are explicit and formula-based.
+- Final requirement states exactly one row per merge key.
+- No ambiguous words such as "optimize smartly" without rules.
+- Prompt avoids contradictions between grain, join, and merge instructions.
+""")
+
+            st.markdown("""
+Suggested prompt template:
+
+BUSINESS OBJECTIVE:
+<business goal>
+
+TARGET DATA GRAIN:
+- One row per: <key>
+
+JOIN RULES:
+- <base table>
+- <table>: <cardinality + join behavior>
+
+MERGE KEY:
+- <key>
+
+DEDUPLICATION RULES:
+- <table>: dedup on <key> using latest <column>
+
+FINAL DATASET REQUIREMENT:
+- EXACTLY ONE ROW per merge key
+- Apply final ROW_NUMBER based dedup after all joins
+
+KPI DEFINITIONS:
+1. <KPI_NAME>: <formula>
+2. <KPI_NAME>: <formula>
+""")
+
+    if st.button("Prompt Guidelines", type="secondary"):
+        show_prompt_guidelines_dialog()
     
     st.divider()
     
@@ -762,7 +730,7 @@ def main():
                         if not selected_database_for_ingest:
                             raise ValueError("Please select Database")
 
-                        csv_table_name, csv_columns, csv_records = _extract_csv_schema(
+                        csv_table_name, csv_columns, csv_records = extract_csv_schema(
                             uploaded_csv,
                             custom_table_name=custom_csv_table_name,
                         )
@@ -779,7 +747,7 @@ def main():
                         if qualified_csv_table in st.session_state.csv_ingested_tables:
                             st.info(f"CSV source already added: {qualified_csv_table}")
                         else:
-                            _ingest_api_to_raw(
+                            ingest_records_to_raw(
                                 connection=connection,
                                 database_name=selected_database_for_ingest,
                                 table_name=csv_table_name,
@@ -808,24 +776,44 @@ def main():
                 st.session_state.api_script_last_signature = ""
             if "api_script_collapsed" not in st.session_state:
                 st.session_state.api_script_collapsed = False
+            if "api_editable_script" not in st.session_state:
+                st.session_state.api_editable_script = ""
 
             api_signature = f"{api_url.strip()}|{len(api_token.strip())}"
             if api_signature != st.session_state.api_script_last_signature:
                 st.session_state.api_script_last_signature = api_signature
                 st.session_state.api_script_collapsed = False
+                st.session_state.api_editable_script = ""  # Reset when URL changes
 
             if api_url.strip() and api_token.strip():
-                preview_script = _build_api_ingestion_script(
+                preview_script = build_api_ingestion_script(
                     api_url=api_url.strip(),
                     selected_database=st.session_state.get("selected_database")
                 )
 
                 with st.expander(
-                    "API Ingestion Python Script (Preview)",
+                    "API Ingestion Python Script (Edit & Execute)",
                     expanded=not st.session_state.api_script_collapsed,
                 ):
-                    st.caption("Review this script before executing API ingestion.")
-                    st.code(preview_script, language="python")
+                    st.caption("Review and customize the script below if needed, then click 'Fetch and Ingest API Source' to execute it.")
+                    
+                    if st.button("Reset to Default", type="secondary", key="reset_api_script"):
+                        st.session_state.api_editable_script = preview_script
+                        st.rerun()
+                    
+                    # Initialize editable script with preview if empty
+                    if not st.session_state.api_editable_script:
+                        st.session_state.api_editable_script = preview_script
+                    
+                    editable_script = st.text_area(
+                        "Python Script:",
+                        value=st.session_state.api_editable_script,
+                        height=400,
+                        key="api_script_editor"
+                    )
+                    
+                    # Update session state when user edits
+                    st.session_state.api_editable_script = editable_script
 
             if st.button("Fetch and Ingest API Source", type="secondary"):
                 try:
@@ -839,40 +827,68 @@ def main():
                         raise ValueError("Please provide API URL")
                     if not api_token or not api_token.strip():
                         raise ValueError("Please provide API token")
+                    
+                    if not st.session_state.api_editable_script or not st.session_state.api_editable_script.strip():
+                        raise ValueError("Please ensure the script is not empty")
 
-                    request = Request(api_url.strip())
-                    request.add_header("Authorization", f"Bearer {api_token.strip()}")
-                    request.add_header("Accept", "application/json")
-
-                    with urlopen(request, timeout=60) as response:
-                        charset = response.headers.get_content_charset() or "utf-8"
-                        body = response.read().decode(charset, errors="replace")
-
-                    payload = json.loads(body)
-                    records = _normalize_api_records(payload)
-                    if not records:
-                        raise ValueError("API returned no records")
-
-                    api_table_name = _infer_api_table_name(api_url.strip())
-                    columns = _infer_api_columns(records)
-
-                    _ingest_api_to_raw(
-                        connection=connection,
-                        database_name=selected_database_for_ingest,
-                        table_name=api_table_name,
-                        columns=columns,
-                        records=records,
+                    # Execute the edited script
+                    script_to_execute = st.session_state.api_editable_script
+                    
+                    # Create a temporary script file
+                    temp_script = tempfile.NamedTemporaryFile(
+                        mode='w',
+                        suffix='.py',
+                        delete=False,
+                        encoding='utf-8'
                     )
-
-                    qualified_api_table = f"{selected_database_for_ingest}.AI_ETL_RAW.{api_table_name}"
-                    if qualified_api_table not in st.session_state.selected_source_tables:
-                        st.session_state.selected_source_tables.append(qualified_api_table)
-
-                    st.success(f"API source ingested successfully into {qualified_api_table}")
-                    st.caption(f"Fetched rows: {len(records)}")
-                    st.caption(f"Detected columns: {len(columns)}")
+                    temp_script.write(script_to_execute)
+                    temp_script.close()
+                    
+                    try:
+                        # Execute the script
+                        result = subprocess.run(
+                            ["python", temp_script.name],
+                            capture_output=True,
+                            text=True,
+                            timeout=300,
+                            cwd=str(Path.cwd())
+                        )
+                        
+                        # Check for execution errors
+                        if result.returncode != 0:
+                            error_output = result.stderr or result.stdout or "Unknown error"
+                            raise ValueError(f"Script execution failed:\n{error_output}")
+                        
+                        # Display success message and script output
+                        st.success("✅ API ingestion script executed successfully!")
+                        if result.stdout:
+                            st.info(f"Script output:\n{result.stdout}")
+                        
+                        # Re-fetch to update selected sources if needed
+                        if selected_database_for_ingest in st.session_state.databases_list:
+                            try:
+                                cursor_refresh = connection.cursor()
+                                cursor_refresh.execute(f"USE DATABASE {selected_database_for_ingest}")
+                                cursor_refresh.execute(f"USE SCHEMA {selected_database_for_ingest}.AI_ETL_RAW")
+                                tables = list_tables(connection)
+                                for table in tables:
+                                    qualified_table = f"{selected_database_for_ingest}.AI_ETL_RAW.{table}"
+                                    if qualified_table not in st.session_state.selected_source_tables:
+                                        st.session_state.selected_source_tables.append(qualified_table)
+                                cursor_refresh.close()
+                            except Exception:
+                                pass  # Silently continue if refresh fails
+                                
+                    finally:
+                        # Clean up temporary file
+                        try:
+                            os.unlink(temp_script.name)
+                        except Exception:
+                            pass
+                            
                 except Exception as e:
-                    st.error(f"Failed to ingest API source: {str(e)}")
+                    st.error(f"Failed to execute API ingestion script: {str(e)}")
+                    st.warning("You can edit the script above and try again.")
 
         selected_database = st.selectbox(
             "Select Database:",
@@ -1048,7 +1064,7 @@ def main():
             try:
                 # Step 1: Validate selected source tables in Snowflake
                 st.info("Validating selected source tables across databases/schemas...")
-                table_groups = _group_tables_by_db_schema(selected_tables)
+                table_groups = group_tables_by_db_schema(selected_tables)
                 if not table_groups:
                     raise ValueError("Please select valid source tables")
 
@@ -1094,7 +1110,7 @@ def main():
 
                 # Step 6: Validate generated SQL with LLM
                 st.info("Running LLM validation checks...")
-                validation_prompt = _build_validation_prompt(
+                validation_prompt = build_validation_prompt(
                     requirement=requirement,
                     table_schemas=schemas,
                     staging_sql=sql_sections["staging"],
@@ -1102,13 +1118,16 @@ def main():
                     business_sql=sql_sections["business"],
                 )
                 validation_raw = generate(validation_prompt, provider=llm_provider)
-                validation_result = _parse_validation_response(validation_raw)
+                validation_result = parse_validation_response(validation_raw)
                 
                 # Store in session state (overwrite on new generation)
                 st.session_state.staging_sql = sql_sections["staging"]
                 st.session_state.transform_sql = sql_sections["transform"]
                 st.session_state.business_sql = sql_sections["business"]
                 st.session_state.validation_result = validation_result
+                st.session_state.pipeline_requirement = requirement
+                st.session_state.pipeline_source_tables = selected_tables
+                st.session_state.pipeline_schema_snapshot = schemas
                 
                 # Stop timer and calculate elapsed time
                 end_time = time.perf_counter()
@@ -1215,7 +1234,7 @@ def main():
 
                 with st.chat_message("assistant"):
                     try:
-                        chat_prompt = _build_sql_chat_prompt(
+                        chat_prompt = build_sql_chat_prompt(
                             user_message,
                             st.session_state.get("staging_sql", ""),
                             st.session_state.get("transform_sql", ""),
@@ -1274,32 +1293,34 @@ def main():
         # Save Output buttons
         st.divider()
 
+        @st.dialog("Save Pipeline")
+        def show_save_pipeline_dialog():
+            pipeline_name = st.text_input("Pipeline Name", key="save_pipeline_name_input")
+
+            if st.button("Save Pipeline", type="primary", key="confirm_save_pipeline_btn"):
+                try:
+                    save_pipeline(
+                        pipeline_id=pipeline_name if pipeline_name and pipeline_name.strip() else "default_pipeline",
+                        requirement=st.session_state.get("pipeline_requirement", ""),
+                        source_tables=st.session_state.get("pipeline_source_tables", []),
+                        schema_snapshot=st.session_state.get("pipeline_schema_snapshot", {}),
+                        staging_sql=st.session_state.staging_sql,
+                        transform_sql=st.session_state.transform_sql,
+                        business_sql=st.session_state.business_sql,
+                    )
+                    st.success("Pipeline saved successfully.")
+                except Exception as e:
+                    st.error(f"Failed to save pipeline: {str(e)}")
+
         save_col1, save_col2 = st.columns(2)
 
         with save_col1:
-            save_local_clicked = st.button("Save Outputs Locally", type="secondary")
-        with save_col2:
             save_github_clicked = st.button("Save Outputs in GitHub", type="secondary")
+        with save_col2:
+            save_pipeline_clicked = st.button("Save Pipeline", type="secondary")
 
-        if save_local_clicked:
-            try:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                folder_name = f"AI_ETL_Output_{timestamp}"
-
-                base_path = Path.cwd()
-                folder_path = base_path / folder_name
-
-                _write_sql_output_files(
-                    folder_path,
-                    st.session_state.staging_sql,
-                    st.session_state.transform_sql,
-                    st.session_state.business_sql,
-                )
-                
-                st.success(f"✅ SQL files saved successfully to: {folder_path}")
-                
-            except Exception as e:
-                st.error(f"Failed to save files: {str(e)}")
+        if save_pipeline_clicked:
+            show_save_pipeline_dialog()
 
         if save_github_clicked:
             try:
@@ -1311,14 +1332,14 @@ def main():
                 etl_outputs_root.mkdir(parents=True, exist_ok=True)
                 folder_path = etl_outputs_root / folder_name
 
-                _write_sql_output_files(
+                write_sql_output_files(
                     folder_path,
                     st.session_state.staging_sql,
                     st.session_state.transform_sql,
                     st.session_state.business_sql,
                 )
 
-                _save_outputs_in_github(base_path, folder_path)
+                save_outputs_in_github(base_path, folder_path)
                 st.success(f"✅ SQL files saved and pushed to GitHub: {folder_path}")
             except Exception as e:
                 st.error(f"Failed to save outputs in GitHub: {str(e)}")

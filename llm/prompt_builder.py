@@ -330,90 +330,59 @@ LAYER RESPONSIBILITIES:
 
 STAGING (AI_ETL_STG):
 
-For EACH source table, you MUST generate a STRICT 4-step incremental load SQL pattern.
-You MUST follow the EXACT structure below. DO NOT DEVIATE from this format.
+The staging layer is responsible for creating a clean, raw copy of source tables from AI_ETL_RAW into AI_ETL_STG.
 
-----------------------------------------
-STEP 1: CREATE TABLE
-----------------------------------------
-CREATE TABLE IF NOT EXISTS AI_ETL_STG.STG_<table>
-LIKE AI_ETL_RAW.<table>;
+- Data is fully refreshed on every run (FULL LOAD strategy)
+- No joins, no transformations, no filtering
+- LAST_LOAD_DATE is maintained only for tracking purposes (NOT for filtering)
 
-----------------------------------------
-STEP 2: INSERT INTO DATALOAD (IF NOT EXISTS)
-----------------------------------------
-INSERT INTO AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
-SELECT '<table>', CURRENT_TIMESTAMP()
-WHERE NOT EXISTS (
-    SELECT 1 FROM AI_ETL_STG.DATALOAD WHERE TABLE_NAME = '<table>'
-);
+---------------------------------------------------------------------
 
-----------------------------------------
-STEP 3: INSERT OVERWRITE WITH WATERMARK (MANDATORY)
-----------------------------------------
+For EACH source table, you MUST generate EXACTLY 4 SQL statements.
+You MUST follow the EXACT structure below.
 
-- You MUST use INSERT OVERWRITE
-- You MUST include a WHERE clause with a watermark filter
-- You MUST use ONLY a TIMESTAMP/DATE column from schema for incremental logic
+---------------------------------------------------------------------
 
-INCREMENTAL COLUMN SELECTION RULE (STRICT AND MANDATORY):
+1. CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_<table>
+   LIKE AI_ETL.AI_ETL_RAW.<table>;
 
-- ALWAYS use LAST_UPDATED_DATE if it exists in the table
-- If LAST_UPDATED_DATE does NOT exist, then use:
-  UPDATED_AT → MODIFIED_DATE → CREATED_AT (in this exact priority order)
+---------------------------------------------------------------------
 
-- You MUST NOT use:
-  - ID columns (e.g., CUSTOMERID, PRODUCTID, ORDER_ID)
-  - STRING columns (e.g., NAME, EMAIL, PHONE)
-  - Numeric columns
-  - Derived expressions or functions (NO HASH, NO TRY_TO_TIMESTAMP on random columns)
+2. INSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)
+   SELECT '<table>', '1900-01-01'::TIMESTAMP
+   WHERE NOT EXISTS (
+       SELECT 1 
+       FROM AI_ETL.AI_ETL_STG.DATALOAD 
+       WHERE TABLE_NAME = '<table>'
+   );
 
-- If no valid timestamp/date column exists:
-  → DO NOT invent logic
-  → Instead use FULL LOAD (SELECT * without WHERE)
+---------------------------------------------------------------------
 
-MANDATORY SQL FORMAT:
+3. INSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_<table>
+   SELECT *
+   FROM AI_ETL.AI_ETL_RAW.<table>;
 
-INSERT OVERWRITE INTO AI_ETL_STG.STG_<table>
-SELECT *
-FROM AI_ETL_RAW.<table>
-WHERE <incremental_column> > (
-    SELECT MAX(LAST_LOAD_DATE)
-    FROM AI_ETL_STG.DATALOAD
-    WHERE TABLE_NAME = '<table>'
-);
+---------------------------------------------------------------------
 
-----------------------------------------
-STEP 4: UPDATE DATALOAD (MANDATORY)
-----------------------------------------
+4. UPDATE AI_ETL.AI_ETL_STG.DATALOAD
+   SET LAST_LOAD_DATE = CURRENT_TIMESTAMP()
+   WHERE TABLE_NAME = '<table>';
 
-- You MUST update using MAX(<incremental_column>)
-- DO NOT use CURRENT_TIMESTAMP()
+---------------------------------------------------------------------
 
-UPDATE AI_ETL_STG.DATALOAD
-SET LAST_LOAD_DATE = (
-    SELECT MAX(<incremental_column>)
-    FROM AI_ETL_STG.STG_<table>
-)
-WHERE TABLE_NAME = '<table>';
-
-----------------------------------------
 CRITICAL RULES (DO NOT VIOLATE):
 
-- DO NOT skip the WHERE clause in STEP 3
-- DO NOT choose incorrect columns for incremental logic
-- DO NOT use CUSTOMERID, PRODUCTID, or any ID column
-- DO NOT generate partial SQL
-- DO NOT change SQL structure
-- DO NOT abbreviate anything
-- Use fully qualified table names ONLY (AI_ETL_RAW, AI_ETL_STG)
+- DO NOT reference LAST_UPDATED_DATE or any timestamp column in filtering
+- DO NOT use ID columns for watermark logic
+- DO NOT modify the structure of the 4 SQL steps
+- ALWAYS use fully qualified 3-part table names
 
-----------------------------------------
+---------------------------------------------------------------------
+
 OUTPUT REQUIREMENT:
 
-- Generate this 4-step SQL separately for EACH source table
-- Use REAL column names from schema
-- Ensure consistency across all tables
+- Generate this 4-statement SQL block separately for EACH source table
+- Use REAL table names from schema
 
 TRANSFORM (AI_ETL_WI):
 {transform_instructions}

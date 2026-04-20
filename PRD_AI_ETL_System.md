@@ -4,7 +4,7 @@ PRODUCT REQUIREMENTS DOCUMENT
 
 1. EXECUTIVE SUMMARY
 1.1 Product Overview
-The AI-Driven ETL SQL Generator is a desktop-based application that assists data engineers in generating production-ready Snowflake SQL scripts using natural language requirements. The system supports both locally-hosted and API-based Large Language Models (LLMs) to produce schema-aware, multi-layered ETL SQL code with full human review, optional in-app staged execution, and an SQL assistant for post-generation guidance.
+The AI-Driven ETL SQL Generator is a desktop-based application that assists data engineers in generating production-ready Snowflake SQL scripts using natural language requirements. The system supports both locally-hosted and API-based Large Language Models (LLMs) to produce schema-aware, multi-layered ETL SQL code with full human review, optional in-app staged execution, an SQL assistant for post-generation guidance, CSV/API source ingestion into the raw schema, and editable API ingestion scripts before execution.
 
 1.2 Business Objective
 The system reduces the time and effort required to write repetitive ETL SQL by automating the generation of staging, transformation, and business logic layers while maintaining full human oversight and control.
@@ -31,11 +31,12 @@ Solution: An intelligent assistant that generates Snowflake-compliant, layered S
 3.1 Technology Stack
 Frontend/UI: Streamlit (Python-based web framework)
 Database: Snowflake Data Warehouse
-LLM: Ollama (local inference engine) and OpenAI API
-Programming Language: Python 3.1x
+LLM: Ollama (local inference engine), OpenAI API, and Claude options exposed in the UI
+Programming Language: Python 3.10+
 Key Libraries:
 • streamlit - User interface
 • snowflake-connector-python - Snowflake integration
+• pandas - API payload normalization and Snowflake ingestion
 • ollama - Local LLM client
 • openai - OpenAI API client
 • python-dotenv - Environment variable management
@@ -51,79 +52,81 @@ AI_ETL_RAW → AI_ETL_STG → AI_ETL_WI → AI_ETL_BR
 4.1 Standard User Journey
 
 Application Launch:
-User launches Streamlit app locally
-App loads with default or custom Snowflake connection options
+User launches the Streamlit app locally.
+App loads with Snowflake connection options and source-ingestion controls.
 
 Snowflake Connection Setup
- User provides credentials via UI toggle
+User provides credentials via the UI.
 • Enters account, user, password, warehouse (required)
 • Optionally enters role, database, schema
 • System validates connection and displays success message
 
-Database & Schema Selection (Custom connection only)
-User selects database from dropdown
-User selects schema from dropdown
-Available tables are fetched and displayed
+Database & Schema Selection
+User selects a database from the dropdown.
+User selects a schema from the dropdown.
+Available tables are fetched and displayed.
+
+Source Ingestion
+User can browse Snowflake source tables from the selected database/schema and add them to a persistent source list.
+User can also upload a CSV file for ingestion into the selected database's AI_ETL_RAW schema.
+For CSV upload, the app validates the file, infers columns, supports an optional custom target table name, and ingests the file as a new raw table.
+User can also enter an API URL and token.
+The app generates an editable Python ingestion script, allows reset to the auto-generated version, and executes the edited script on demand.
+The API ingestion script uses pandas and writes the resulting dataframe to the AI_ETL_RAW schema.
 
 Requirement Input
-User describes ETL task in natural language (free-text)
-Example: "Create a customer analytics pipeline with order history"
-
-Source Table Selection
-User selects one or more source tables from the currently selected database/schema and adds them to a persistent selected list
-User can repeat this across multiple databases/schemas
-Selected source tables are stored as fully-qualified names (DATABASE.SCHEMA.TABLE)
-Generation Trigger
+User describes the ETL task in natural language.
+The requirements field is free-text and supports detailed prompt engineering guidance.
+The user can open a Prompt Guidelines dialog below the requirements field for structure, joins, dedup rules, KPI formulas, and template examples.
 
 Transform and Business layer target selection
 For each target layer, user first chooses one mode:
 • Create New Target Table
 • Select Existing Target Table
 If user selects existing target table, user then selects target database, target schema, and one target table.
-If user selects create new, LLM generates CREATE + MERGE logic for that layer.
+If user selects create new, the LLM generates CREATE + MERGE logic for that layer.
 
 LLM Provider Selection
-User selects LLM provider in UI (ollama or openai)
-If ollama is selected, system checks whether configured OLLAMA_MODEL is installed and blocks generation if not available.
+User selects the LLM provider in the UI (ollama, openai, or supported Claude options).
+If ollama is selected, the system checks whether the configured OLLAMA_MODEL is installed and blocks generation if not available.
 
-User clicks "Generate" button
-Timer starts automatically
+User clicks "Generate"
+Timer starts automatically.
+
 Processing Workflow
+System validates inputs (requirement not empty, tables selected).
+System validates all selected source tables exist in Snowflake across selected databases/schemas.
+System fetches column-level schema for each selected source table.
+System constructs a comprehensive LLM prompt with schema context.
+System sends the prompt to the selected LLM provider.
+System extracts and parses SQL sections from the LLM response.
+System runs an LLM-based validation pass that scores the generated SQL and reports checks.
+Timer stops and displays elapsed time in mm:ss format.
 
-System validates inputs (requirement not empty, tables selected)
-Validates all selected source tables exist in Snowflake across selected databases/schemas
-Fetches column-level schema for each selected source table across selected databases/schemas
-Constructs comprehensive LLM prompt with schema context
-Sends prompt to selected LLM provider (ollama or openai)
-Extracts and parses SQL sections from LLM response
-Timer stops and displays elapsed time (mm:ss format)
 Output Review & Edit
+Generated SQL is displayed in 3 tabs:
+• Staging SQL: incremental load patterns
+• Transform SQL: data transformation logic
+• Business SQL: aggregation and reporting logic
+All SQL is editable directly in the UI and persists in session state until regenerated.
 
-Generated SQL displayed in 3 tabs:
-• Staging SQL: Incremental load patterns
-• Transform SQL: Data transformation logic 
-• Business SQL: Aggregation and reporting logic
-All SQL is editable directly in the UI
 Save Output
+User can save outputs locally or save outputs in GitHub.
+Local save writes staging.sql, transform.sql, and business.sql into a timestamped folder in the project root.
+GitHub save writes the same files into an etl_outputs folder, commits them, and pushes to the main branch.
 
-User clicks "Save Output" button
-The system creates a unique folder in the project root directory
-Saves staging.sql, transform.sql, business.sql
-Displays confirmation with folder path
 SQL Assistant (Post-Generation)
-
-After SQL is generated, user can open the SQL Assistant dialog
-User asks questions about generated SQL (logic, joins, mappings, syntax intent)
-Assistant uses generated Staging/Transform/Business SQL as context
-Assistant responses are generated by the currently selected LLM provider
+After SQL is generated, user can open the SQL Assistant dialog.
+User asks questions about generated SQL (logic, joins, mappings, syntax intent).
+Assistant uses the generated Staging/Transform/Business SQL as context.
+Assistant responses are generated by the currently selected LLM provider.
 
 Pipeline Execution (Optional)
-
-User checks execution confirmation checkbox
-User clicks "Execute ETL Pipeline"
-System executes layers sequentially: Staging → Transform → Business
-Execution stops immediately if any layer fails
-Success/failure feedback is shown for each layer and for the overall pipeline
+User checks the execution confirmation checkbox.
+User clicks "Execute ETL Pipeline".
+System executes layers sequentially: Staging → Transform → Business.
+Execution stops immediately if any layer fails.
+Success/failure feedback is shown for each layer and for the overall pipeline.
 
 
 5. FUNCTIONAL REQUIREMENTS
@@ -194,6 +197,13 @@ FR-4.3 Target Table Selection
 • If existing-table mode is selected, user must select one database, one schema, and one table for that layer
 • If create-new mode is selected, no table selection is required for that layer
 
+FR-4.4 External Source Ingestion
+• CSV upload is validated before ingestion: .csv extension, non-empty file, header row, no duplicate normalized column names, and at least one data row
+• CSV files are ingested into the selected database's AI_ETL_RAW schema with an optional custom table name
+• API source ingestion accepts an API URL and token, fetches JSON payloads, normalizes them into pandas DataFrames, and ingests them into AI_ETL_RAW
+• The API ingestion script is editable before execution and can be reset to the auto-generated version
+• Ingested source tables are added to the persistent source-table list for downstream generation
+
 FR-5: Schema Extraction
 FR-5.1 Column-Level Metadata Fetching
 • For each selected table, fetch: Column name and Data type
@@ -225,9 +235,14 @@ FR-6.2 Prompt Engineering
 • Demand Snowflake-specific syntax
 • Prohibit LLM from asking clarifying questions (best-effort)
 
+FR-6.3 Prompt Guidance UI
+• Provide an in-app Prompt Guidelines dialog below the requirements field
+• Include guidance for business objective, target grain, merge key, join rules, dedup rules, KPI definitions, and prompt quality checklist
+• Provide a reusable prompt template to help users structure requirements for better SQL generation
+
 FR-7: SQL Generation
 FR-7.1 LLM Invocation
-• Send constructed prompt to selected provider (ollama or openai)
+• Send constructed prompt to selected provider (ollama, openai, or Claude options exposed in the UI)
 • Ollama model configured via OLLAMA_MODEL; host via OLLAMA_HOST (default: http://localhost:11434)
 • OpenAI model configured via OPENAI_MODEL (default: gpt-4.1)
 • OpenAI API key configured via OPENAI_API_KEY
@@ -244,6 +259,12 @@ FR-7.2 SQL Extraction & Parsing
 • Trim whitespace
 • Validate all sections are non-empty
 • Raise error if any section missing
+
+FR-7.6 LLM Validation Scoring
+• After SQL generation, run a second LLM pass that evaluates the output against the user requirement and source schemas
+• Produce a structured confidence score, summary, check list, and missing-items list
+• Parse the validation response from JSON and display the result in the UI
+• Keep the validation report visible alongside the editable SQL output
 
 FR-7.3 Staging SQL Patterns
 • One staging script per source table
@@ -280,6 +301,11 @@ FR-8.2 Output Persistence
 • Tabs remain visible after generation
 • Only cleared on new generation or app reload
 
+FR-8.3 Validation Report Display
+• Display the validation score as a confidence metric
+• Show per-check PASS/PARTIAL/FAIL results
+• Show missing or weak items when present
+
 FR-9: Performance Tracking
 FR-9.1 Generation Timer
 • Timer starts on "Generate" button click
@@ -312,6 +338,12 @@ FR-10.3 Save Validation
 • Only enabled after successful generation
 • Handle file system errors gracefully
 • Display user-friendly error messages
+
+FR-10.4 GitHub Save
+• Save outputs in a project-level etl_outputs folder before pushing
+• Commit the generated output folder to the main branch
+• Push the commit to origin/main
+• Display an error if the current branch is not main or if git push fails
 
 FR-11: SQL Assistant
 FR-11.1 Assistant Availability
@@ -410,18 +442,25 @@ LLM unavailable | "Failed to generate LLM response: [error details]" | Display e
 Missing SQL section | "Could not find '[Section Name] SQL' in LLM response" | Display error, stop execution
 Empty SQL section | "[Section Name] SQL section is empty after extraction" | Display error, stop execution
 
-7.5 File System Errors
+7.5 Validation Report Errors
+
+Error Condition | User Message | Action
+Validation JSON parse failure | "Validation parser could not read structured response." | Display default validation report with score 0
+Validation service failure | "Validation error: [error details]" | Display error and keep generated SQL visible
+
+7.6 File System Errors
 
 Error Condition | User Message | Action
 Permission denied | "Failed to save files: [error details]" | Display error, files not saved
 Disk full | "Failed to save files: [error details]" | Display error, files not saved
+Git commit or push failure | "Failed to save outputs in GitHub: [error details]" | Display error, files not saved or pushed
 
-7.6 Assistant Errors
+7.7 Assistant Errors
 
 Error Condition | User Message | Action
 Provider call failure in assistant | "Chat error: [error details]" | Display error in dialog; keep session chat history
 
-7.7 Execution Errors
+7.8 Execution Errors
 
 Error Condition | User Message | Action
 Execution without confirmation | "Please confirm execution before running the ETL pipeline" | Block execution
@@ -453,6 +492,7 @@ Statement execution failure | "ETL execution failed: [error details]" | Stop cur
 • Files written to user-controlled directory
 • No arbitrary file path injection
 • Folder names sanitized before creation
+• GitHub save uses the local repository and existing git remote configuration
 
 
 9. OUT-OF-SCOPE ITEMS
@@ -471,13 +511,12 @@ Snowflake compatibility checking
 Performance optimization analysis
 
 9.3 Version Control
-Git integration
 SQL version history
 Change tracking
 
 
 9.4 Python Code Generation
-Python ETL script generation (module exists but unused)
+General-purpose Python ETL orchestration code generation
 Airflow/dbt integration
 Orchestration code
 
@@ -506,9 +545,8 @@ Success/failure metrics
 
 10.2 Medium-Term (Moderate-Complexity)
 • SQL syntax validation using Snowflake SQL parser
-• Support for Python script generation (activate existing module)
 • Expand provider support beyond current options (for example, Anthropic, Azure OpenAI)
-• Support for user to upload a flat file (CSV, XLSX)
+• Support for additional flat file types such as XLSX
 
 10.3 Long-Term (High-Complexity)
 • Transactional SQL execution with rollback capability
@@ -524,6 +562,8 @@ Success/failure metrics
 • For OpenAI provider usage: OPENAI_API_KEY is configured and network access to OpenAI API is available
 • Snowflake account is accessible from user's network
 • Python 3.10+ is installed
+• pandas is installed in the active environment for API source ingestion
+• Git is installed and the repository has a configured origin remote for GitHub save
 
 11.2 User Assumptions
 • User has basic SQL knowledge
@@ -551,7 +591,10 @@ The system is considered successful if:
 User can connect to Snowflake using custom credentials
 User can browse and select databases, schemas, and tables
 User can select source tables across multiple databases/schemas
+User can upload CSV files and ingest them into AI_ETL_RAW with optional custom table names
+User can ingest API data into AI_ETL_RAW using an editable pandas-based script
 User can input natural language ETL requirements
+User can open the Prompt Guidelines dialog and use the prompt template to improve requirements
 User can choose target mode (create new or existing) for transform and business layers
 User can select one existing target table per layer when existing-table mode is chosen
 User can choose LLM provider (ollama or openai)
@@ -560,9 +603,10 @@ System validates table existence before generation
 System fetches accurate schema metadata from Snowflake
 LLM generates valid, schema-aware SQL in 3 layers
 Generated SQL is editable in the UI
+System displays an LLM-based validation score and check report for generated SQL
 User can ask follow-up SQL questions through SQL Assistant using generated SQL context
 User can execute generated SQL pipeline in-app with explicit confirmation and staged feedback
-User can save SQL to disk in organized folder structure
+User can save SQL to disk locally or save and push outputs to GitHub
 System displays generation time for performance awareness
 All errors are handled gracefully with user-friendly messages
 

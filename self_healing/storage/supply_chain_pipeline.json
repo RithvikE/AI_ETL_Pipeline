@@ -1,0 +1,265 @@
+{
+  "pipeline_id": "supply_chain_pipeline",
+  "requirement": "BUSINESS OBJECTIVE:\nOptimize inventory and shipping efficiency using order, product, supplier, and inventory data.\n\nTARGET DATA GRAIN:\n- One row per: SALES_ORDER_NO + PRODUCTID + SUPPLIERID\n\nJOIN RULES:\n- Orders is the base table\n- Inventory is 1-to-many → MUST take latest record per PRODUCT_ID + SUPPLIER_ID\n- Product, Supplier, Customer are dimension tables → assume 1-to-1 after deduplication\n\nMERGE KEY:\n- SALES_ORDER_NO + PRODUCTID + SUPPLIERID\n\nDEDUPLICATION RULES:\n- Orders → deduplicate on SALES_ORDER_NO + PRODUCTID + SUPPLIERID using latest ORDER_DATE\n- Inventory → deduplicate on PRODUCT_ID + SUPPLIER_ID using latest INVENTORY_UPDATE_DATE\n- All joins MUST NOT create more than 1 row per merge key\n\nFINAL DATASET REQUIREMENT:\n- MUST contain EXACTLY ONE ROW per MERGE KEY\n- MUST apply final ROW_NUMBER() deduplication after all joins\n\nKPI DEFINITIONS:\n\n1. OTIF_FLAG:\n   CASE WHEN ON_TIME_DELIVERY = TRUE AND ACCURATE_ORDER = TRUE THEN 1 ELSE 0\n\n2. LANDED_COST_PER_UNIT:\n   UNIT_PRICE + SHIPPING_COST + INVENTORY_SERVICE_COSTS + STORAGE_COST\n\n3. DSI_ESTIMATE:\n   INVENTORY_UNITS / SALES_QUANTITY\n\n4. GMROI:\n   ((FINAL_PRICE - UNIT_PRICE) * SALES_QUANTITY) / (UNIT_PRICE * INVENTORY_UNITS)\n\n5. ORDER_TO_CASH_CYCLE_DAYS:\n   DATEDIFF(ACTUAL_DELIVERY_DATE, ORDER_DATE)\n\n6. RETURN_TO_SALES_RATIO:\n   RETURN / SALES_QUANTITY\n\n7. LAST_MILE_EFFICIENCY:\n   SHIPPING_COST / SALES_QUANTITY\n\n8. STOCKOUT_RISK_SCORE:\n   NO_OF_DAYS_OUT_OF_STOCK / SALES_QUANTITY\n\n9. CARBON_FOOTPRINT_EST:\n   SALES_QUANTITY * SHIPPING_FACTOR (based on MODE_OF_SHIPPING)\n\n10. CARRIER_LEAD_TIME_VARIANCE:\n    DATEDIFF(ACTUAL_DELIVERY_DATE, EXPECTED_DELIVERY_DATE)",
+  "source_tables": [
+    "AI_ETL.AI_ETL_RAW.CUSTOMER",
+    "AI_ETL.AI_ETL_RAW.INVENTORY",
+    "AI_ETL.AI_ETL_RAW.ORDERS",
+    "AI_ETL.AI_ETL_RAW.PRODUCT",
+    "AI_ETL.AI_ETL_RAW.SUPPLIER"
+  ],
+  "schema_snapshot": {
+    "AI_ETL.AI_ETL_RAW.CUSTOMER": [
+      {
+        "column_name": "CUSTOMERID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMER_NAME",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMER_CITY",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMER_STATE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMER_COUNTRY",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMER_COUNTRY_CODE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMERSTATE_CODE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "PHONE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "EMAIL",
+        "data_type": "TEXT"
+      }
+    ],
+    "AI_ETL.AI_ETL_RAW.INVENTORY": [
+      {
+        "column_name": "INVENTORY_ID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "PRODUCT_ID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "SUPPLIER_ID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "INVENTORY_UNITS",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "IN_OUT_STOCK",
+        "data_type": "BOOLEAN"
+      },
+      {
+        "column_name": "NO_OF_DAYS_OUT_OF_STOCK",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "INVENTORY_SERVICE_COSTS",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "INVENTORY_RISK_COSTS",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "STORAGE_COST",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "INVENTORY_CARRYING_COST",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "INVENTORY_UPDATE_DATE",
+        "data_type": "TEXT"
+      }
+    ],
+    "AI_ETL.AI_ETL_RAW.ORDERS": [
+      {
+        "column_name": "SALES_ORDER_NO",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "PRODUCTID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "SUPPLIERID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "CUSTOMERID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "DATE",
+        "data_type": "DATE"
+      },
+      {
+        "column_name": "MONTH",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "FISCAL_YEAR",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "SALES_QUANTITY",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "ACCURATE_ORDER",
+        "data_type": "BOOLEAN"
+      },
+      {
+        "column_name": "RETURN",
+        "data_type": "BOOLEAN"
+      },
+      {
+        "column_name": "DEFECTIVE_UNIT",
+        "data_type": "BOOLEAN"
+      },
+      {
+        "column_name": "DEFECT_COUNT",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "MODE_OF_ORDER",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "SHIPPING_COST",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "ON_TIME_SHIPPING_FLAG",
+        "data_type": "BOOLEAN"
+      },
+      {
+        "column_name": "EXPECTED_DELIVERY_DATE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "ACTUAL_DELIVERY_DATE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "ON_TIME_DELIVERY",
+        "data_type": "BOOLEAN"
+      },
+      {
+        "column_name": "SELLING_PRICE",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "SALES_QUANTITY__BY_SELLING_PRICE",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "DISCOUNT_PER",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "FINAL_PRICE",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "MODE_OF_SHIPPING",
+        "data_type": "TEXT"
+      }
+    ],
+    "AI_ETL.AI_ETL_RAW.PRODUCT": [
+      {
+        "column_name": "PRODUCT_ID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "PRODUCT_NAME",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "PRODUCT_COMPONENT",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "UNIT_PRICE",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "EOL_DATE",
+        "data_type": "TEXT"
+      }
+    ],
+    "AI_ETL.AI_ETL_RAW.SUPPLIER": [
+      {
+        "column_name": "SUPPLIER_ID",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "SUPPLIER_NAME",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "SUPPLIER_CITY",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "STATE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "COUNTRY",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "PHONE",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "EMAIL",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "RISK",
+        "data_type": "TEXT"
+      },
+      {
+        "column_name": "ROAD_TRANSPORT_COST",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "SEA_TRANSPORT_COST",
+        "data_type": "NUMBER"
+      },
+      {
+        "column_name": "AIR_TRANSPORT_COST",
+        "data_type": "NUMBER"
+      }
+    ]
+  },
+  "sql": {
+    "staging": "CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_CUSTOMER LIKE AI_ETL.AI_ETL_RAW.CUSTOMER;\nINSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)\nSELECT 'CUSTOMER', '1900-01-01'::TIMESTAMP\nWHERE NOT EXISTS (\n    SELECT 1 \n    FROM AI_ETL.AI_ETL_STG.DATALOAD \n    WHERE TABLE_NAME = 'CUSTOMER'\n);\nINSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_CUSTOMER\nSELECT *\nFROM AI_ETL.AI_ETL_RAW.CUSTOMER;\nUPDATE AI_ETL.AI_ETL_STG.DATALOAD\nSET LAST_LOAD_DATE = CURRENT_TIMESTAMP()\nWHERE TABLE_NAME = 'CUSTOMER';\n\nCREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_INVENTORY LIKE AI_ETL.AI_ETL_RAW.INVENTORY;\nINSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)\nSELECT 'INVENTORY', '1900-01-01'::TIMESTAMP\nWHERE NOT EXISTS (\n    SELECT 1 \n    FROM AI_ETL.AI_ETL_STG.DATALOAD \n    WHERE TABLE_NAME = 'INVENTORY'\n);\nINSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_INVENTORY\nSELECT *\nFROM AI_ETL.AI_ETL_RAW.INVENTORY;\nUPDATE AI_ETL.AI_ETL_STG.DATALOAD\nSET LAST_LOAD_DATE = CURRENT_TIMESTAMP()\nWHERE TABLE_NAME = 'INVENTORY';\n\nCREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_ORDERS LIKE AI_ETL.AI_ETL_RAW.ORDERS;\nINSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)\nSELECT 'ORDERS', '1900-01-01'::TIMESTAMP\nWHERE NOT EXISTS (\n    SELECT 1 \n    FROM AI_ETL.AI_ETL_STG.DATALOAD \n    WHERE TABLE_NAME = 'ORDERS'\n);\nINSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_ORDERS\nSELECT *\nFROM AI_ETL.AI_ETL_RAW.ORDERS;\nUPDATE AI_ETL.AI_ETL_STG.DATALOAD\nSET LAST_LOAD_DATE = CURRENT_TIMESTAMP()\nWHERE TABLE_NAME = 'ORDERS';\n\nCREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_PRODUCT LIKE AI_ETL.AI_ETL_RAW.PRODUCT;\nINSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)\nSELECT 'PRODUCT', '1900-01-01'::TIMESTAMP\nWHERE NOT EXISTS (\n    SELECT 1 \n    FROM AI_ETL.AI_ETL_STG.DATALOAD \n    WHERE TABLE_NAME = 'PRODUCT'\n);\nINSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_PRODUCT\nSELECT *\nFROM AI_ETL.AI_ETL_RAW.PRODUCT;\nUPDATE AI_ETL.AI_ETL_STG.DATALOAD\nSET LAST_LOAD_DATE = CURRENT_TIMESTAMP()\nWHERE TABLE_NAME = 'PRODUCT';\n\nCREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_STG.STG_SUPPLIER LIKE AI_ETL.AI_ETL_RAW.SUPPLIER;\nINSERT INTO AI_ETL.AI_ETL_STG.DATALOAD (TABLE_NAME, LAST_LOAD_DATE)\nSELECT 'SUPPLIER', '1900-01-01'::TIMESTAMP\nWHERE NOT EXISTS (\n    SELECT 1 \n    FROM AI_ETL.AI_ETL_STG.DATALOAD \n    WHERE TABLE_NAME = 'SUPPLIER'\n);\nINSERT OVERWRITE INTO AI_ETL.AI_ETL_STG.STG_SUPPLIER\nSELECT *\nFROM AI_ETL.AI_ETL_RAW.SUPPLIER;\nUPDATE AI_ETL.AI_ETL_STG.DATALOAD\nSET LAST_LOAD_DATE = CURRENT_TIMESTAMP()\nWHERE TABLE_NAME = 'SUPPLIER';",
+    "transform": "CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_WI.TRF_ORDER_SUPPLY_METRICS AS\nWITH orders_enriched AS (\n    SELECT\n        SALES_ORDER_NO,\n        PRODUCTID,\n        SUPPLIERID,\n        CUSTOMERID,\n        COALESCE(\n            TRY_TO_DATE(TO_VARCHAR(DATE), 'DD-MM-YYYY'),\n            TRY_TO_DATE(TO_VARCHAR(DATE), 'YYYY-MM-DD'),\n            TRY_TO_DATE(DATE)\n        ) AS ORDER_DATE,\n        COALESCE(\n            TRY_TO_DATE(TO_VARCHAR(EXPECTED_DELIVERY_DATE), 'DD-MM-YYYY'),\n            TRY_TO_DATE(TO_VARCHAR(EXPECTED_DELIVERY_DATE), 'YYYY-MM-DD'),\n            TRY_TO_DATE(EXPECTED_DELIVERY_DATE)\n        ) AS EXPECTED_DELIVERY_DATE,\n        COALESCE(\n            TRY_TO_DATE(TO_VARCHAR(ACTUAL_DELIVERY_DATE), 'DD-MM-YYYY'),\n            TRY_TO_DATE(TO_VARCHAR(ACTUAL_DELIVERY_DATE), 'YYYY-MM-DD'),\n            TRY_TO_DATE(ACTUAL_DELIVERY_DATE)\n        ) AS ACTUAL_DELIVERY_DATE,\n        SALES_QUANTITY,\n        ACCURATE_ORDER,\n        RETURN AS RETURN_FLAG,\n        DEFECTIVE_UNIT,\n        DEFECT_COUNT,\n        MODE_OF_ORDER,\n        SHIPPING_COST,\n        ON_TIME_SHIPPING_FLAG,\n        ON_TIME_DELIVERY,\n        FINAL_PRICE,\n        SALES_QUANTITY__BY_SELLING_PRICE AS SALES_QUANTITY_BY_SELLING_PRICE,\n        DISCOUNT_PER,\n        MODE_OF_SHIPPING,\n        SELLING_PRICE\n    FROM AI_ETL.AI_ETL_STG.STG_ORDERS\n),\norders_dedup AS (\n    SELECT\n        SALES_ORDER_NO,\n        PRODUCTID,\n        SUPPLIERID,\n        CUSTOMERID,\n        ORDER_DATE,\n        EXPECTED_DELIVERY_DATE,\n        ACTUAL_DELIVERY_DATE,\n        SALES_QUANTITY,\n        ACCURATE_ORDER,\n        RETURN_FLAG,\n        DEFECTIVE_UNIT,\n        DEFECT_COUNT,\n        MODE_OF_ORDER,\n        SHIPPING_COST,\n        ON_TIME_SHIPPING_FLAG,\n        ON_TIME_DELIVERY,\n        FINAL_PRICE,\n        SALES_QUANTITY_BY_SELLING_PRICE,\n        DISCOUNT_PER,\n        MODE_OF_SHIPPING,\n        SELLING_PRICE\n    FROM (\n        SELECT\n            orders_enriched.*,\n            ROW_NUMBER() OVER (\n                PARTITION BY SALES_ORDER_NO, PRODUCTID, SUPPLIERID\n                ORDER BY ORDER_DATE DESC NULLS LAST, ACTUAL_DELIVERY_DATE DESC NULLS LAST\n            ) AS rn\n        FROM orders_enriched\n    )\n    WHERE rn = 1\n),\ninventory_enriched AS (\n    SELECT\n        INVENTORY_ID,\n        PRODUCT_ID,\n        SUPPLIER_ID,\n        INVENTORY_UNITS,\n        IN_OUT_STOCK,\n        NO_OF_DAYS_OUT_OF_STOCK,\n        INVENTORY_SERVICE_COSTS,\n        INVENTORY_RISK_COSTS,\n        STORAGE_COST,\n        INVENTORY_CARRYING_COST,\n        COALESCE(\n            TRY_TO_DATE(TO_VARCHAR(INVENTORY_UPDATE_DATE), 'DD-MM-YYYY'),\n            TRY_TO_DATE(TO_VARCHAR(INVENTORY_UPDATE_DATE), 'YYYY-MM-DD'),\n            TRY_TO_DATE(INVENTORY_UPDATE_DATE)\n        ) AS INVENTORY_UPDATE_DATE\n    FROM AI_ETL.AI_ETL_STG.STG_INVENTORY\n),\ninventory_dedup AS (\n    SELECT\n        PRODUCT_ID,\n        SUPPLIER_ID,\n        INVENTORY_UNITS,\n        IN_OUT_STOCK,\n        NO_OF_DAYS_OUT_OF_STOCK,\n        INVENTORY_SERVICE_COSTS,\n        INVENTORY_RISK_COSTS,\n        STORAGE_COST,\n        INVENTORY_CARRYING_COST,\n        INVENTORY_UPDATE_DATE\n    FROM (\n        SELECT\n            inventory_enriched.*,\n            ROW_NUMBER() OVER (\n                PARTITION BY PRODUCT_ID, SUPPLIER_ID\n                ORDER BY INVENTORY_UPDATE_DATE DESC NULLS LAST, INVENTORY_ID DESC\n            ) AS rn\n        FROM inventory_enriched\n    )\n    WHERE rn = 1\n),\nproduct_enriched AS (\n    SELECT\n        PRODUCT_ID,\n        PRODUCT_NAME,\n        PRODUCT_COMPONENT,\n        UNIT_PRICE,\n        COALESCE(\n            TRY_TO_DATE(TO_VARCHAR(EOL_DATE), 'DD-MM-YYYY'),\n            TRY_TO_DATE(TO_VARCHAR(EOL_DATE), 'YYYY-MM-DD'),\n            TRY_TO_DATE(EOL_DATE)\n        ) AS EOL_DATE\n    FROM AI_ETL.AI_ETL_STG.STG_PRODUCT\n),\nproduct_dedup AS (\n    SELECT\n        PRODUCT_ID,\n        PRODUCT_NAME,\n        PRODUCT_COMPONENT,\n        UNIT_PRICE,\n        EOL_DATE\n    FROM (\n        SELECT\n            product_enriched.*,\n            ROW_NUMBER() OVER (\n                PARTITION BY PRODUCT_ID\n                ORDER BY EOL_DATE DESC NULLS LAST, PRODUCT_NAME ASC\n            ) AS rn\n        FROM product_enriched\n    )\n    WHERE rn = 1\n),\nsupplier_enriched AS (\n    SELECT\n        SUPPLIER_ID,\n        SUPPLIER_NAME,\n        SUPPLIER_CITY,\n        STATE AS SUPPLIER_STATE,\n        COUNTRY AS SUPPLIER_COUNTRY,\n        PHONE AS SUPPLIER_PHONE,\n        EMAIL AS SUPPLIER_EMAIL,\n        RISK AS SUPPLIER_RISK,\n        ROAD_TRANSPORT_COST,\n        SEA_TRANSPORT_COST,\n        AIR_TRANSPORT_COST\n    FROM AI_ETL.AI_ETL_STG.STG_SUPPLIER\n),\nsupplier_dedup AS (\n    SELECT\n        SUPPLIER_ID,\n        SUPPLIER_NAME,\n        SUPPLIER_CITY,\n        SUPPLIER_STATE,\n        SUPPLIER_COUNTRY,\n        SUPPLIER_PHONE,\n        SUPPLIER_EMAIL,\n        SUPPLIER_RISK,\n        ROAD_TRANSPORT_COST,\n        SEA_TRANSPORT_COST,\n        AIR_TRANSPORT_COST\n    FROM (\n        SELECT\n            supplier_enriched.*,\n            ROW_NUMBER() OVER (\n                PARTITION BY SUPPLIER_ID\n                ORDER BY SUPPLIER_ID ASC\n            ) AS rn\n        FROM supplier_enriched\n    )\n    WHERE rn = 1\n),\ncustomer_enriched AS (\n    SELECT\n        CUSTOMERID,\n        CUSTOMER_NAME,\n        CUSTOMER_CITY,\n        CUSTOMER_STATE,\n        CUSTOMER_COUNTRY,\n        CUSTOMER_COUNTRY_CODE,\n        CUSTOMERSTATE_CODE,\n        PHONE AS CUSTOMER_PHONE,\n        EMAIL AS CUSTOMER_EMAIL\n    FROM AI_ETL.AI_ETL_STG.STG_CUSTOMER\n),\ncustomer_dedup AS (\n    SELECT\n        CUSTOMERID,\n        CUSTOMER_NAME,\n        CUSTOMER_CITY,\n        CUSTOMER_STATE,\n        CUSTOMER_COUNTRY,\n        CUSTOMER_COUNTRY_CODE,\n        CUSTOMERSTATE_CODE,\n        CUSTOMER_PHONE,\n        CUSTOMER_EMAIL\n    FROM (\n        SELECT\n            customer_enriched.*,\n            ROW_NUMBER() OVER (\n                PARTITION BY CUSTOMERID\n                ORDER BY CUSTOMERID ASC\n            ) AS rn\n        FROM customer_enriched\n    )\n    WHERE rn = 1\n),\njoined_data AS (\n    SELECT\n        o.SALES_ORDER_NO,\n        o.PRODUCTID,\n        o.SUPPLIERID,\n        o.CUSTOMERID,\n        o.ORDER_DATE,\n        o.EXPECTED_DELIVERY_DATE,\n        o.ACTUAL_DELIVERY_DATE,\n        o.SALES_QUANTITY,\n        o.ACCURATE_ORDER,\n        o.RETURN_FLAG,\n        o.DEFECTIVE_UNIT,\n        o.DEFECT_COUNT,\n        o.MODE_OF_ORDER,\n        o.SHIPPING_COST,\n        o.ON_TIME_SHIPPING_FLAG,\n        o.ON_TIME_DELIVERY,\n        o.FINAL_PRICE,\n        o.SALES_QUANTITY_BY_SELLING_PRICE,\n        o.DISCOUNT_PER,\n        o.MODE_OF_SHIPPING,\n        o.SELLING_PRICE,\n        p.UNIT_PRICE,\n        p.PRODUCT_NAME,\n        p.PRODUCT_COMPONENT,\n        p.EOL_DATE,\n        s.SUPPLIER_NAME,\n        s.SUPPLIER_CITY,\n        s.SUPPLIER_STATE,\n        s.SUPPLIER_COUNTRY,\n        s.SUPPLIER_PHONE,\n        s.SUPPLIER_EMAIL,\n        s.SUPPLIER_RISK,\n        s.ROAD_TRANSPORT_COST,\n        s.SEA_TRANSPORT_COST,\n        s.AIR_TRANSPORT_COST,\n        c.CUSTOMER_NAME,\n        c.CUSTOMER_CITY,\n        c.CUSTOMER_STATE,\n        c.CUSTOMER_COUNTRY,\n        c.CUSTOMER_COUNTRY_CODE,\n        c.CUSTOMERSTATE_CODE,\n        c.CUSTOMER_PHONE,\n        c.CUSTOMER_EMAIL,\n        i.INVENTORY_UNITS,\n        i.IN_OUT_STOCK,\n        i.NO_OF_DAYS_OUT_OF_STOCK,\n        i.INVENTORY_SERVICE_COSTS,\n        i.INVENTORY_RISK_COSTS,\n        i.STORAGE_COST,\n        i.INVENTORY_CARRYING_COST,\n        i.INVENTORY_UPDATE_DATE,\n        CASE\n            WHEN UPPER(o.MODE_OF_SHIPPING) = 'AIR' THEN 3.500\n            WHEN UPPER(o.MODE_OF_SHIPPING) = 'SEA' THEN 1.200\n            WHEN UPPER(o.MODE_OF_SHIPPING) = 'ROAD' THEN 0.800\n            WHEN UPPER(o.MODE_OF_SHIPPING) = 'RAIL' THEN 1.000\n            ELSE 1.500\n        END AS SHIPPING_FACTOR,\n        CASE WHEN o.RETURN_FLAG THEN 1 ELSE 0 END AS RETURN_NUMERIC\n    FROM orders_dedup o\n    LEFT JOIN product_dedup p\n        ON o.PRODUCTID = p.PRODUCT_ID\n    LEFT JOIN supplier_dedup s\n        ON o.SUPPLIERID = s.SUPPLIER_ID\n    LEFT JOIN customer_dedup c\n        ON o.CUSTOMERID = c.CUSTOMERID\n    LEFT JOIN inventory_dedup i\n        ON o.PRODUCTID = i.PRODUCT_ID\n        AND o.SUPPLIERID = i.SUPPLIER_ID\n),\nfinal_metrics AS (\n    SELECT\n        joined_data.SALES_ORDER_NO,\n        joined_data.PRODUCTID,\n        joined_data.SUPPLIERID,\n        joined_data.CUSTOMERID,\n        joined_data.ORDER_DATE,\n        joined_data.EXPECTED_DELIVERY_DATE,\n        joined_data.ACTUAL_DELIVERY_DATE,\n        joined_data.SALES_QUANTITY,\n        joined_data.ACCURATE_ORDER,\n        joined_data.RETURN_FLAG,\n        joined_data.DEFECTIVE_UNIT,\n        joined_data.DEFECT_COUNT,\n        joined_data.MODE_OF_ORDER,\n        joined_data.SHIPPING_COST,\n        joined_data.ON_TIME_SHIPPING_FLAG,\n        joined_data.ON_TIME_DELIVERY,\n        joined_data.FINAL_PRICE,\n        joined_data.SALES_QUANTITY_BY_SELLING_PRICE,\n        joined_data.DISCOUNT_PER,\n        joined_data.MODE_OF_SHIPPING,\n        joined_data.SELLING_PRICE,\n        joined_data.UNIT_PRICE,\n        joined_data.PRODUCT_NAME,\n        joined_data.PRODUCT_COMPONENT,\n        joined_data.EOL_DATE,\n        joined_data.SUPPLIER_NAME,\n        joined_data.SUPPLIER_CITY,\n        joined_data.SUPPLIER_STATE,\n        joined_data.SUPPLIER_COUNTRY,\n        joined_data.SUPPLIER_PHONE,\n        joined_data.SUPPLIER_EMAIL,\n        joined_data.SUPPLIER_RISK,\n        joined_data.ROAD_TRANSPORT_COST,\n        joined_data.SEA_TRANSPORT_COST,\n        joined_data.AIR_TRANSPORT_COST,\n        joined_data.CUSTOMER_NAME,\n        joined_data.CUSTOMER_CITY,\n        joined_data.CUSTOMER_STATE,\n        joined_data.CUSTOMER_COUNTRY,\n        joined_data.CUSTOMER_COUNTRY_CODE,\n        joined_data.CUSTOMERSTATE_CODE,\n        joined_data.CUSTOMER_PHONE,\n        joined_data.CUSTOMER_EMAIL,\n        joined_data.INVENTORY_UNITS,\n        joined_data.IN_OUT_STOCK,\n        joined_data.NO_OF_DAYS_OUT_OF_STOCK,\n        joined_data.INVENTORY_SERVICE_COSTS,\n        joined_data.INVENTORY_RISK_COSTS,\n        joined_data.STORAGE_COST,\n        joined_data.INVENTORY_CARRYING_COST,\n        joined_data.INVENTORY_UPDATE_DATE,\n        joined_data.SHIPPING_FACTOR,\n        joined_data.RETURN_NUMERIC,\n        CASE WHEN joined_data.ON_TIME_DELIVERY = TRUE AND joined_data.ACCURATE_ORDER = TRUE THEN 1 ELSE 0 END AS OTIF_FLAG,\n        joined_data.UNIT_PRICE + joined_data.SHIPPING_COST + joined_data.INVENTORY_SERVICE_COSTS + joined_data.STORAGE_COST AS LANDED_COST_PER_UNIT,\n        CASE\n            WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n            ELSE joined_data.INVENTORY_UNITS / joined_data.SALES_QUANTITY\n        END AS DSI_ESTIMATE,\n        CASE\n            WHEN joined_data.UNIT_PRICE IS NULL OR joined_data.UNIT_PRICE = 0 OR joined_data.INVENTORY_UNITS IS NULL OR joined_data.INVENTORY_UNITS = 0 THEN NULL\n            ELSE ((joined_data.FINAL_PRICE - joined_data.UNIT_PRICE) * joined_data.SALES_QUANTITY) / (joined_data.UNIT_PRICE * joined_data.INVENTORY_UNITS)\n        END AS GMROI,\n        CASE\n            WHEN joined_data.ORDER_DATE IS NULL OR joined_data.ACTUAL_DELIVERY_DATE IS NULL THEN NULL\n            ELSE DATEDIFF('day', joined_data.ORDER_DATE, joined_data.ACTUAL_DELIVERY_DATE)\n        END AS ORDER_TO_CASH_CYCLE_DAYS,\n        CASE\n            WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n            ELSE joined_data.RETURN_NUMERIC / joined_data.SALES_QUANTITY\n        END AS RETURN_TO_SALES_RATIO,\n        CASE\n            WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n            ELSE joined_data.SHIPPING_COST / joined_data.SALES_QUANTITY\n        END AS LAST_MILE_EFFICIENCY,\n        CASE\n            WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n            ELSE joined_data.NO_OF_DAYS_OUT_OF_STOCK / joined_data.SALES_QUANTITY\n        END AS STOCKOUT_RISK_SCORE,\n        joined_data.SALES_QUANTITY * joined_data.SHIPPING_FACTOR AS CARBON_FOOTPRINT_EST,\n        CASE\n            WHEN joined_data.EXPECTED_DELIVERY_DATE IS NULL OR joined_data.ACTUAL_DELIVERY_DATE IS NULL THEN NULL\n            ELSE DATEDIFF('day', joined_data.EXPECTED_DELIVERY_DATE, joined_data.ACTUAL_DELIVERY_DATE)\n        END AS CARRIER_LEAD_TIME_VARIANCE\n    FROM joined_data\n),\nfinal_dedup AS (\n    SELECT\n        final_metrics.*,\n        ROW_NUMBER() OVER (\n            PARTITION BY final_metrics.SALES_ORDER_NO, final_metrics.PRODUCTID, final_metrics.SUPPLIERID\n            ORDER BY final_metrics.ORDER_DATE DESC NULLS LAST, final_metrics.ACTUAL_DELIVERY_DATE DESC NULLS LAST\n        ) AS rn\n    FROM final_metrics\n)\nSELECT\n    SALES_ORDER_NO,\n    PRODUCTID,\n    SUPPLIERID,\n    CUSTOMERID,\n    ORDER_DATE,\n    EXPECTED_DELIVERY_DATE,\n    ACTUAL_DELIVERY_DATE,\n    SALES_QUANTITY,\n    SELLING_PRICE,\n    FINAL_PRICE,\n    UNIT_PRICE,\n    SHIPPING_COST,\n    SALES_QUANTITY_BY_SELLING_PRICE,\n    DISCOUNT_PER,\n    INVENTORY_UNITS,\n    INVENTORY_SERVICE_COSTS,\n    INVENTORY_RISK_COSTS,\n    STORAGE_COST,\n    INVENTORY_CARRYING_COST,\n    NO_OF_DAYS_OUT_OF_STOCK,\n    IN_OUT_STOCK,\n    INVENTORY_UPDATE_DATE,\n    ACCURATE_ORDER,\n    RETURN_FLAG,\n    DEFECTIVE_UNIT,\n    DEFECT_COUNT,\n    MODE_OF_ORDER,\n    ON_TIME_SHIPPING_FLAG,\n    ON_TIME_DELIVERY,\n    MODE_OF_SHIPPING,\n    PRODUCT_NAME,\n    PRODUCT_COMPONENT,\n    EOL_DATE,\n    SUPPLIER_NAME,\n    SUPPLIER_CITY,\n    SUPPLIER_STATE,\n    SUPPLIER_COUNTRY,\n    SUPPLIER_PHONE,\n    SUPPLIER_EMAIL,\n    SUPPLIER_RISK,\n    ROAD_TRANSPORT_COST,\n    SEA_TRANSPORT_COST,\n    AIR_TRANSPORT_COST,\n    CUSTOMER_NAME,\n    CUSTOMER_CITY,\n    CUSTOMER_STATE,\n    CUSTOMER_COUNTRY,\n    CUSTOMER_COUNTRY_CODE,\n    CUSTOMERSTATE_CODE,\n    CUSTOMER_PHONE,\n    CUSTOMER_EMAIL,\n    SHIPPING_FACTOR,\n    OTIF_FLAG,\n    LANDED_COST_PER_UNIT,\n    DSI_ESTIMATE,\n    GMROI,\n    ORDER_TO_CASH_CYCLE_DAYS,\n    RETURN_TO_SALES_RATIO,\n    LAST_MILE_EFFICIENCY,\n    STOCKOUT_RISK_SCORE,\n    CARBON_FOOTPRINT_EST,\n    CARRIER_LEAD_TIME_VARIANCE\nFROM final_dedup\nWHERE rn = 1;\n\nMERGE INTO AI_ETL.AI_ETL_WI.TRF_ORDER_SUPPLY_METRICS AS T\nUSING (\n    WITH orders_enriched AS (\n        SELECT\n            SALES_ORDER_NO,\n            PRODUCTID,\n            SUPPLIERID,\n            CUSTOMERID,\n            COALESCE(\n                TRY_TO_DATE(TO_VARCHAR(DATE), 'DD-MM-YYYY'),\n                TRY_TO_DATE(TO_VARCHAR(DATE), 'YYYY-MM-DD'),\n                TRY_TO_DATE(DATE)\n            ) AS ORDER_DATE,\n            COALESCE(\n                TRY_TO_DATE(TO_VARCHAR(EXPECTED_DELIVERY_DATE), 'DD-MM-YYYY'),\n                TRY_TO_DATE(TO_VARCHAR(EXPECTED_DELIVERY_DATE), 'YYYY-MM-DD'),\n                TRY_TO_DATE(EXPECTED_DELIVERY_DATE)\n            ) AS EXPECTED_DELIVERY_DATE,\n            COALESCE(\n                TRY_TO_DATE(TO_VARCHAR(ACTUAL_DELIVERY_DATE), 'DD-MM-YYYY'),\n                TRY_TO_DATE(TO_VARCHAR(ACTUAL_DELIVERY_DATE), 'YYYY-MM-DD'),\n                TRY_TO_DATE(ACTUAL_DELIVERY_DATE)\n            ) AS ACTUAL_DELIVERY_DATE,\n            SALES_QUANTITY,\n            ACCURATE_ORDER,\n            RETURN AS RETURN_FLAG,\n            DEFECTIVE_UNIT,\n            DEFECT_COUNT,\n            MODE_OF_ORDER,\n            SHIPPING_COST,\n            ON_TIME_SHIPPING_FLAG,\n            ON_TIME_DELIVERY,\n            FINAL_PRICE,\n            SALES_QUANTITY__BY_SELLING_PRICE AS SALES_QUANTITY_BY_SELLING_PRICE,\n            DISCOUNT_PER,\n            MODE_OF_SHIPPING,\n            SELLING_PRICE\n        FROM AI_ETL.AI_ETL_STG.STG_ORDERS\n    ),\n    orders_dedup AS (\n        SELECT\n            SALES_ORDER_NO,\n            PRODUCTID,\n            SUPPLIERID,\n            CUSTOMERID,\n            ORDER_DATE,\n            EXPECTED_DELIVERY_DATE,\n            ACTUAL_DELIVERY_DATE,\n            SALES_QUANTITY,\n            ACCURATE_ORDER,\n            RETURN_FLAG,\n            DEFECTIVE_UNIT,\n            DEFECT_COUNT,\n            MODE_OF_ORDER,\n            SHIPPING_COST,\n            ON_TIME_SHIPPING_FLAG,\n            ON_TIME_DELIVERY,\n            FINAL_PRICE,\n            SALES_QUANTITY_BY_SELLING_PRICE,\n            DISCOUNT_PER,\n            MODE_OF_SHIPPING,\n            SELLING_PRICE\n        FROM (\n            SELECT\n                orders_enriched.*,\n                ROW_NUMBER() OVER (\n                    PARTITION BY SALES_ORDER_NO, PRODUCTID, SUPPLIERID\n                    ORDER BY ORDER_DATE DESC NULLS LAST, ACTUAL_DELIVERY_DATE DESC NULLS LAST\n                ) AS rn\n            FROM orders_enriched\n        )\n        WHERE rn = 1\n    ),\n    inventory_enriched AS (\n        SELECT\n            INVENTORY_ID,\n            PRODUCT_ID,\n            SUPPLIER_ID,\n            INVENTORY_UNITS,\n            IN_OUT_STOCK,\n            NO_OF_DAYS_OUT_OF_STOCK,\n            INVENTORY_SERVICE_COSTS,\n            INVENTORY_RISK_COSTS,\n            STORAGE_COST,\n            INVENTORY_CARRYING_COST,\n            COALESCE(\n                TRY_TO_DATE(TO_VARCHAR(INVENTORY_UPDATE_DATE), 'DD-MM-YYYY'),\n                TRY_TO_DATE(TO_VARCHAR(INVENTORY_UPDATE_DATE), 'YYYY-MM-DD'),\n                TRY_TO_DATE(INVENTORY_UPDATE_DATE)\n            ) AS INVENTORY_UPDATE_DATE\n        FROM AI_ETL.AI_ETL_STG.STG_INVENTORY\n    ),\n    inventory_dedup AS (\n        SELECT\n            PRODUCT_ID,\n            SUPPLIER_ID,\n            INVENTORY_UNITS,\n            IN_OUT_STOCK,\n            NO_OF_DAYS_OUT_OF_STOCK,\n            INVENTORY_SERVICE_COSTS,\n            INVENTORY_RISK_COSTS,\n            STORAGE_COST,\n            INVENTORY_CARRYING_COST,\n            INVENTORY_UPDATE_DATE\n        FROM (\n            SELECT\n                inventory_enriched.*,\n                ROW_NUMBER() OVER (\n                    PARTITION BY PRODUCT_ID, SUPPLIER_ID\n                    ORDER BY INVENTORY_UPDATE_DATE DESC NULLS LAST, INVENTORY_ID DESC\n                ) AS rn\n            FROM inventory_enriched\n        )\n        WHERE rn = 1\n    ),\n    product_enriched AS (\n        SELECT\n            PRODUCT_ID,\n            PRODUCT_NAME,\n            PRODUCT_COMPONENT,\n            UNIT_PRICE,\n            COALESCE(\n                TRY_TO_DATE(TO_VARCHAR(EOL_DATE), 'DD-MM-YYYY'),\n                TRY_TO_DATE(TO_VARCHAR(EOL_DATE), 'YYYY-MM-DD'),\n                TRY_TO_DATE(EOL_DATE)\n            ) AS EOL_DATE\n        FROM AI_ETL.AI_ETL_STG.STG_PRODUCT\n    ),\n    product_dedup AS (\n        SELECT\n            PRODUCT_ID,\n            PRODUCT_NAME,\n            PRODUCT_COMPONENT,\n            UNIT_PRICE,\n            EOL_DATE\n        FROM (\n            SELECT\n                product_enriched.*,\n                ROW_NUMBER() OVER (\n                    PARTITION BY PRODUCT_ID\n                    ORDER BY EOL_DATE DESC NULLS LAST, PRODUCT_NAME ASC\n                ) AS rn\n            FROM product_enriched\n        )\n        WHERE rn = 1\n    ),\n    supplier_enriched AS (\n        SELECT\n            SUPPLIER_ID,\n            SUPPLIER_NAME,\n            SUPPLIER_CITY,\n            STATE AS SUPPLIER_STATE,\n            COUNTRY AS SUPPLIER_COUNTRY,\n            PHONE AS SUPPLIER_PHONE,\n            EMAIL AS SUPPLIER_EMAIL,\n            RISK AS SUPPLIER_RISK,\n            ROAD_TRANSPORT_COST,\n            SEA_TRANSPORT_COST,\n            AIR_TRANSPORT_COST\n        FROM AI_ETL.AI_ETL_STG.STG_SUPPLIER\n    ),\n    supplier_dedup AS (\n        SELECT\n            SUPPLIER_ID,\n            SUPPLIER_NAME,\n            SUPPLIER_CITY,\n            SUPPLIER_STATE,\n            SUPPLIER_COUNTRY,\n            SUPPLIER_PHONE,\n            SUPPLIER_EMAIL,\n            SUPPLIER_RISK,\n            ROAD_TRANSPORT_COST,\n            SEA_TRANSPORT_COST,\n            AIR_TRANSPORT_COST\n        FROM (\n            SELECT\n                supplier_enriched.*,\n                ROW_NUMBER() OVER (\n                    PARTITION BY SUPPLIER_ID\n                    ORDER BY SUPPLIER_ID ASC\n                ) AS rn\n            FROM supplier_enriched\n        )\n        WHERE rn = 1\n    ),\n    customer_enriched AS (\n        SELECT\n            CUSTOMERID,\n            CUSTOMER_NAME,\n            CUSTOMER_CITY,\n            CUSTOMER_STATE,\n            CUSTOMER_COUNTRY,\n            CUSTOMER_COUNTRY_CODE,\n            CUSTOMERSTATE_CODE,\n            PHONE AS CUSTOMER_PHONE,\n            EMAIL AS CUSTOMER_EMAIL\n        FROM AI_ETL.AI_ETL_STG.STG_CUSTOMER\n    ),\n    customer_dedup AS (\n        SELECT\n            CUSTOMERID,\n            CUSTOMER_NAME,\n            CUSTOMER_CITY,\n            CUSTOMER_STATE,\n            CUSTOMER_COUNTRY,\n            CUSTOMER_COUNTRY_CODE,\n            CUSTOMERSTATE_CODE,\n            CUSTOMER_PHONE,\n            CUSTOMER_EMAIL\n        FROM (\n            SELECT\n                customer_enriched.*,\n                ROW_NUMBER() OVER (\n                    PARTITION BY CUSTOMERID\n                    ORDER BY CUSTOMERID ASC\n                ) AS rn\n            FROM customer_enriched\n        )\n        WHERE rn = 1\n    ),\n    joined_data AS (\n        SELECT\n            o.SALES_ORDER_NO,\n            o.PRODUCTID,\n            o.SUPPLIERID,\n            o.CUSTOMERID,\n            o.ORDER_DATE,\n            o.EXPECTED_DELIVERY_DATE,\n            o.ACTUAL_DELIVERY_DATE,\n            o.SALES_QUANTITY,\n            o.ACCURATE_ORDER,\n            o.RETURN_FLAG,\n            o.DEFECTIVE_UNIT,\n            o.DEFECT_COUNT,\n            o.MODE_OF_ORDER,\n            o.SHIPPING_COST,\n            o.ON_TIME_SHIPPING_FLAG,\n            o.ON_TIME_DELIVERY,\n            o.FINAL_PRICE,\n            o.SALES_QUANTITY_BY_SELLING_PRICE,\n            o.DISCOUNT_PER,\n            o.MODE_OF_SHIPPING,\n            o.SELLING_PRICE,\n            p.UNIT_PRICE,\n            p.PRODUCT_NAME,\n            p.PRODUCT_COMPONENT,\n            p.EOL_DATE,\n            s.SUPPLIER_NAME,\n            s.SUPPLIER_CITY,\n            s.SUPPLIER_STATE,\n            s.SUPPLIER_COUNTRY,\n            s.SUPPLIER_PHONE,\n            s.SUPPLIER_EMAIL,\n            s.SUPPLIER_RISK,\n            s.ROAD_TRANSPORT_COST,\n            s.SEA_TRANSPORT_COST,\n            s.AIR_TRANSPORT_COST,\n            c.CUSTOMER_NAME,\n            c.CUSTOMER_CITY,\n            c.CUSTOMER_STATE,\n            c.CUSTOMER_COUNTRY,\n            c.CUSTOMER_COUNTRY_CODE,\n            c.CUSTOMERSTATE_CODE,\n            c.CUSTOMER_PHONE,\n            c.CUSTOMER_EMAIL,\n            i.INVENTORY_UNITS,\n            i.IN_OUT_STOCK,\n            i.NO_OF_DAYS_OUT_OF_STOCK,\n            i.INVENTORY_SERVICE_COSTS,\n            i.INVENTORY_RISK_COSTS,\n            i.STORAGE_COST,\n            i.INVENTORY_CARRYING_COST,\n            i.INVENTORY_UPDATE_DATE,\n            CASE\n                WHEN UPPER(o.MODE_OF_SHIPPING) = 'AIR' THEN 3.500\n                WHEN UPPER(o.MODE_OF_SHIPPING) = 'SEA' THEN 1.200\n                WHEN UPPER(o.MODE_OF_SHIPPING) = 'ROAD' THEN 0.800\n                WHEN UPPER(o.MODE_OF_SHIPPING) = 'RAIL' THEN 1.000\n                ELSE 1.500\n            END AS SHIPPING_FACTOR,\n            CASE WHEN o.RETURN_FLAG THEN 1 ELSE 0 END AS RETURN_NUMERIC\n        FROM orders_dedup o\n        LEFT JOIN product_dedup p\n            ON o.PRODUCTID = p.PRODUCT_ID\n        LEFT JOIN supplier_dedup s\n            ON o.SUPPLIERID = s.SUPPLIER_ID\n        LEFT JOIN customer_dedup c\n            ON o.CUSTOMERID = c.CUSTOMERID\n        LEFT JOIN inventory_dedup i\n            ON o.PRODUCTID = i.PRODUCT_ID\n            AND o.SUPPLIERID = i.SUPPLIER_ID\n    ),\n    final_metrics AS (\n        SELECT\n            joined_data.SALES_ORDER_NO,\n            joined_data.PRODUCTID,\n            joined_data.SUPPLIERID,\n            joined_data.CUSTOMERID,\n            joined_data.ORDER_DATE,\n            joined_data.EXPECTED_DELIVERY_DATE,\n            joined_data.ACTUAL_DELIVERY_DATE,\n            joined_data.SALES_QUANTITY,\n            joined_data.ACCURATE_ORDER,\n            joined_data.RETURN_FLAG,\n            joined_data.DEFECTIVE_UNIT,\n            joined_data.DEFECT_COUNT,\n            joined_data.MODE_OF_ORDER,\n            joined_data.SHIPPING_COST,\n            joined_data.ON_TIME_SHIPPING_FLAG,\n            joined_data.ON_TIME_DELIVERY,\n            joined_data.FINAL_PRICE,\n            joined_data.SALES_QUANTITY_BY_SELLING_PRICE,\n            joined_data.DISCOUNT_PER,\n            joined_data.MODE_OF_SHIPPING,\n            joined_data.SELLING_PRICE,\n            joined_data.UNIT_PRICE,\n            joined_data.PRODUCT_NAME,\n            joined_data.PRODUCT_COMPONENT,\n            joined_data.EOL_DATE,\n            joined_data.SUPPLIER_NAME,\n            joined_data.SUPPLIER_CITY,\n            joined_data.SUPPLIER_STATE,\n            joined_data.SUPPLIER_COUNTRY,\n            joined_data.SUPPLIER_PHONE,\n            joined_data.SUPPLIER_EMAIL,\n            joined_data.SUPPLIER_RISK,\n            joined_data.ROAD_TRANSPORT_COST,\n            joined_data.SEA_TRANSPORT_COST,\n            joined_data.AIR_TRANSPORT_COST,\n            joined_data.CUSTOMER_NAME,\n            joined_data.CUSTOMER_CITY,\n            joined_data.CUSTOMER_STATE,\n            joined_data.CUSTOMER_COUNTRY,\n            joined_data.CUSTOMER_COUNTRY_CODE,\n            joined_data.CUSTOMERSTATE_CODE,\n            joined_data.CUSTOMER_PHONE,\n            joined_data.CUSTOMER_EMAIL,\n            joined_data.INVENTORY_UNITS,\n            joined_data.IN_OUT_STOCK,\n            joined_data.NO_OF_DAYS_OUT_OF_STOCK,\n            joined_data.INVENTORY_SERVICE_COSTS,\n            joined_data.INVENTORY_RISK_COSTS,\n            joined_data.STORAGE_COST,\n            joined_data.INVENTORY_CARRYING_COST,\n            joined_data.INVENTORY_UPDATE_DATE,\n            joined_data.SHIPPING_FACTOR,\n            joined_data.RETURN_NUMERIC,\n            CASE WHEN joined_data.ON_TIME_DELIVERY = TRUE AND joined_data.ACCURATE_ORDER = TRUE THEN 1 ELSE 0 END AS OTIF_FLAG,\n            joined_data.UNIT_PRICE + joined_data.SHIPPING_COST + joined_data.INVENTORY_SERVICE_COSTS + joined_data.STORAGE_COST AS LANDED_COST_PER_UNIT,\n            CASE\n                WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n                ELSE joined_data.INVENTORY_UNITS / joined_data.SALES_QUANTITY\n            END AS DSI_ESTIMATE,\n            CASE\n                WHEN joined_data.UNIT_PRICE IS NULL OR joined_data.UNIT_PRICE = 0 OR joined_data.INVENTORY_UNITS IS NULL OR joined_data.INVENTORY_UNITS = 0 THEN NULL\n                ELSE ((joined_data.FINAL_PRICE - joined_data.UNIT_PRICE) * joined_data.SALES_QUANTITY) / (joined_data.UNIT_PRICE * joined_data.INVENTORY_UNITS)\n            END AS GMROI,\n            CASE\n                WHEN joined_data.ORDER_DATE IS NULL OR joined_data.ACTUAL_DELIVERY_DATE IS NULL THEN NULL\n                ELSE DATEDIFF('day', joined_data.ORDER_DATE, joined_data.ACTUAL_DELIVERY_DATE)\n            END AS ORDER_TO_CASH_CYCLE_DAYS,\n            CASE\n                WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n                ELSE joined_data.RETURN_NUMERIC / joined_data.SALES_QUANTITY\n            END AS RETURN_TO_SALES_RATIO,\n            CASE\n                WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n                ELSE joined_data.SHIPPING_COST / joined_data.SALES_QUANTITY\n            END AS LAST_MILE_EFFICIENCY,\n            CASE\n                WHEN joined_data.SALES_QUANTITY IS NULL OR joined_data.SALES_QUANTITY = 0 THEN NULL\n                ELSE joined_data.NO_OF_DAYS_OUT_OF_STOCK / joined_data.SALES_QUANTITY\n            END AS STOCKOUT_RISK_SCORE,\n            joined_data.SALES_QUANTITY * joined_data.SHIPPING_FACTOR AS CARBON_FOOTPRINT_EST,\n            CASE\n                WHEN joined_data.EXPECTED_DELIVERY_DATE IS NULL OR joined_data.ACTUAL_DELIVERY_DATE IS NULL THEN NULL\n                ELSE DATEDIFF('day', joined_data.EXPECTED_DELIVERY_DATE, joined_data.ACTUAL_DELIVERY_DATE)\n            END AS CARRIER_LEAD_TIME_VARIANCE\n        FROM joined_data\n    ),\n    final_dedup AS (\n        SELECT\n            final_metrics.*,\n            ROW_NUMBER() OVER (\n                PARTITION BY final_metrics.SALES_ORDER_NO, final_metrics.PRODUCTID, final_metrics.SUPPLIERID\n                ORDER BY final_metrics.ORDER_DATE DESC NULLS LAST, final_metrics.ACTUAL_DELIVERY_DATE DESC NULLS LAST\n            ) AS rn\n        FROM final_metrics\n    )\n    SELECT\n        SALES_ORDER_NO,\n        PRODUCTID,\n        SUPPLIERID,\n        CUSTOMERID,\n        ORDER_DATE,\n        EXPECTED_DELIVERY_DATE,\n        ACTUAL_DELIVERY_DATE,\n        SALES_QUANTITY,\n        SELLING_PRICE,\n        FINAL_PRICE,\n        UNIT_PRICE,\n        SHIPPING_COST,\n        SALES_QUANTITY_BY_SELLING_PRICE,\n        DISCOUNT_PER,\n        INVENTORY_UNITS,\n        INVENTORY_SERVICE_COSTS,\n        INVENTORY_RISK_COSTS,\n        STORAGE_COST,\n        INVENTORY_CARRYING_COST,\n        NO_OF_DAYS_OUT_OF_STOCK,\n        IN_OUT_STOCK,\n        INVENTORY_UPDATE_DATE,\n        ACCURATE_ORDER,\n        RETURN_FLAG,\n        DEFECTIVE_UNIT,\n        DEFECT_COUNT,\n        MODE_OF_ORDER,\n        ON_TIME_SHIPPING_FLAG,\n        ON_TIME_DELIVERY,\n        MODE_OF_SHIPPING,\n        PRODUCT_NAME,\n        PRODUCT_COMPONENT,\n        EOL_DATE,\n        SUPPLIER_NAME,\n        SUPPLIER_CITY,\n        SUPPLIER_STATE,\n        SUPPLIER_COUNTRY,\n        SUPPLIER_PHONE,\n        SUPPLIER_EMAIL,\n        SUPPLIER_RISK,\n        ROAD_TRANSPORT_COST,\n        SEA_TRANSPORT_COST,\n        AIR_TRANSPORT_COST,\n        CUSTOMER_NAME,\n        CUSTOMER_CITY,\n        CUSTOMER_STATE,\n        CUSTOMER_COUNTRY,\n        CUSTOMER_COUNTRY_CODE,\n        CUSTOMERSTATE_CODE,\n        CUSTOMER_PHONE,\n        CUSTOMER_EMAIL,\n        SHIPPING_FACTOR,\n        OTIF_FLAG,\n        LANDED_COST_PER_UNIT,\n        DSI_ESTIMATE,\n        GMROI,\n        ORDER_TO_CASH_CYCLE_DAYS,\n        RETURN_TO_SALES_RATIO,\n        LAST_MILE_EFFICIENCY,\n        STOCKOUT_RISK_SCORE,\n        CARBON_FOOTPRINT_EST,\n        CARRIER_LEAD_TIME_VARIANCE\n    FROM final_dedup\n    WHERE rn = 1\n) AS S\nON T.SALES_ORDER_NO = S.SALES_ORDER_NO\nAND T.PRODUCTID = S.PRODUCTID\nAND T.SUPPLIERID = S.SUPPLIERID\nWHEN MATCHED THEN UPDATE SET\n    T.CUSTOMERID = S.CUSTOMERID,\n    T.ORDER_DATE = S.ORDER_DATE,\n    T.EXPECTED_DELIVERY_DATE = S.EXPECTED_DELIVERY_DATE,\n    T.ACTUAL_DELIVERY_DATE = S.ACTUAL_DELIVERY_DATE,\n    T.SALES_QUANTITY = S.SALES_QUANTITY,\n    T.SELLING_PRICE = S.SELLING_PRICE,\n    T.FINAL_PRICE = S.FINAL_PRICE,\n    T.UNIT_PRICE = S.UNIT_PRICE,\n    T.SHIPPING_COST = S.SHIPPING_COST,\n    T.SALES_QUANTITY_BY_SELLING_PRICE = S.SALES_QUANTITY_BY_SELLING_PRICE,\n    T.DISCOUNT_PER = S.DISCOUNT_PER,\n    T.INVENTORY_UNITS = S.INVENTORY_UNITS,\n    T.INVENTORY_SERVICE_COSTS = S.INVENTORY_SERVICE_COSTS,\n    T.INVENTORY_RISK_COSTS = S.INVENTORY_RISK_COSTS,\n    T.STORAGE_COST = S.STORAGE_COST,\n    T.INVENTORY_CARRYING_COST = S.INVENTORY_CARRYING_COST,\n    T.NO_OF_DAYS_OUT_OF_STOCK = S.NO_OF_DAYS_OUT_OF_STOCK,\n    T.IN_OUT_STOCK = S.IN_OUT_STOCK,\n    T.INVENTORY_UPDATE_DATE = S.INVENTORY_UPDATE_DATE,\n    T.ACCURATE_ORDER = S.ACCURATE_ORDER,\n    T.RETURN_FLAG = S.RETURN_FLAG,\n    T.DEFECTIVE_UNIT = S.DEFECTIVE_UNIT,\n    T.DEFECT_COUNT = S.DEFECT_COUNT,\n    T.MODE_OF_ORDER = S.MODE_OF_ORDER,\n    T.ON_TIME_SHIPPING_FLAG = S.ON_TIME_SHIPPING_FLAG,\n    T.ON_TIME_DELIVERY = S.ON_TIME_DELIVERY,\n    T.MODE_OF_SHIPPING = S.MODE_OF_SHIPPING,\n    T.PRODUCT_NAME = S.PRODUCT_NAME,\n    T.PRODUCT_COMPONENT = S.PRODUCT_COMPONENT,\n    T.EOL_DATE = S.EOL_DATE,\n    T.SUPPLIER_NAME = S.SUPPLIER_NAME,\n    T.SUPPLIER_CITY = S.SUPPLIER_CITY,\n    T.SUPPLIER_STATE = S.SUPPLIER_STATE,\n    T.SUPPLIER_COUNTRY = S.SUPPLIER_COUNTRY,\n    T.SUPPLIER_PHONE = S.SUPPLIER_PHONE,\n    T.SUPPLIER_EMAIL = S.SUPPLIER_EMAIL,\n    T.SUPPLIER_RISK = S.SUPPLIER_RISK,\n    T.ROAD_TRANSPORT_COST = S.ROAD_TRANSPORT_COST,\n    T.SEA_TRANSPORT_COST = S.SEA_TRANSPORT_COST,\n    T.AIR_TRANSPORT_COST = S.AIR_TRANSPORT_COST,\n    T.CUSTOMER_NAME = S.CUSTOMER_NAME,\n    T.CUSTOMER_CITY = S.CUSTOMER_CITY,\n    T.CUSTOMER_STATE = S.CUSTOMER_STATE,\n    T.CUSTOMER_COUNTRY = S.CUSTOMER_COUNTRY,\n    T.CUSTOMER_COUNTRY_CODE = S.CUSTOMER_COUNTRY_CODE,\n    T.CUSTOMERSTATE_CODE = S.CUSTOMERSTATE_CODE,\n    T.CUSTOMER_PHONE = S.CUSTOMER_PHONE,\n    T.CUSTOMER_EMAIL = S.CUSTOMER_EMAIL,\n    T.SHIPPING_FACTOR = S.SHIPPING_FACTOR,\n    T.OTIF_FLAG = S.OTIF_FLAG,\n    T.LANDED_COST_PER_UNIT = S.LANDED_COST_PER_UNIT,\n    T.DSI_ESTIMATE = S.DSI_ESTIMATE,\n    T.GMROI = S.GMROI,\n    T.ORDER_TO_CASH_CYCLE_DAYS = S.ORDER_TO_CASH_CYCLE_DAYS,\n    T.RETURN_TO_SALES_RATIO = S.RETURN_TO_SALES_RATIO,\n    T.LAST_MILE_EFFICIENCY = S.LAST_MILE_EFFICIENCY,\n    T.STOCKOUT_RISK_SCORE = S.STOCKOUT_RISK_SCORE,\n    T.CARBON_FOOTPRINT_EST = S.CARBON_FOOTPRINT_EST,\n    T.CARRIER_LEAD_TIME_VARIANCE = S.CARRIER_LEAD_TIME_VARIANCE\nWHEN NOT MATCHED THEN INSERT (\n    SALES_ORDER_NO,\n    PRODUCTID,\n    SUPPLIERID,\n    CUSTOMERID,\n    ORDER_DATE,\n    EXPECTED_DELIVERY_DATE,\n    ACTUAL_DELIVERY_DATE,\n    SALES_QUANTITY,\n    SELLING_PRICE,\n    FINAL_PRICE,\n    UNIT_PRICE,\n    SHIPPING_COST,\n    SALES_QUANTITY_BY_SELLING_PRICE,\n    DISCOUNT_PER,\n    INVENTORY_UNITS,\n    INVENTORY_SERVICE_COSTS,\n    INVENTORY_RISK_COSTS,\n    STORAGE_COST,\n    INVENTORY_CARRYING_COST,\n    NO_OF_DAYS_OUT_OF_STOCK,\n    IN_OUT_STOCK,\n    INVENTORY_UPDATE_DATE,\n    ACCURATE_ORDER,\n    RETURN_FLAG,\n    DEFECTIVE_UNIT,\n    DEFECT_COUNT,\n    MODE_OF_ORDER,\n    ON_TIME_SHIPPING_FLAG,\n    ON_TIME_DELIVERY,\n    MODE_OF_SHIPPING,\n    PRODUCT_NAME,\n    PRODUCT_COMPONENT,\n    EOL_DATE,\n    SUPPLIER_NAME,\n    SUPPLIER_CITY,\n    SUPPLIER_STATE,\n    SUPPLIER_COUNTRY,\n    SUPPLIER_PHONE,\n    SUPPLIER_EMAIL,\n    SUPPLIER_RISK,\n    ROAD_TRANSPORT_COST,\n    SEA_TRANSPORT_COST,\n    AIR_TRANSPORT_COST,\n    CUSTOMER_NAME,\n    CUSTOMER_CITY,\n    CUSTOMER_STATE,\n    CUSTOMER_COUNTRY,\n    CUSTOMER_COUNTRY_CODE,\n    CUSTOMERSTATE_CODE,\n    CUSTOMER_PHONE,\n    CUSTOMER_EMAIL,\n    SHIPPING_FACTOR,\n    OTIF_FLAG,\n    LANDED_COST_PER_UNIT,\n    DSI_ESTIMATE,\n    GMROI,\n    ORDER_TO_CASH_CYCLE_DAYS,\n    RETURN_TO_SALES_RATIO,\n    LAST_MILE_EFFICIENCY,\n    STOCKOUT_RISK_SCORE,\n    CARBON_FOOTPRINT_EST,\n    CARRIER_LEAD_TIME_VARIANCE\n) VALUES (\n    S.SALES_ORDER_NO,\n    S.PRODUCTID,\n    S.SUPPLIERID,\n    S.CUSTOMERID,\n    S.ORDER_DATE,\n    S.EXPECTED_DELIVERY_DATE,\n    S.ACTUAL_DELIVERY_DATE,\n    S.SALES_QUANTITY,\n    S.SELLING_PRICE,\n    S.FINAL_PRICE,\n    S.UNIT_PRICE,\n    S.SHIPPING_COST,\n    S.SALES_QUANTITY_BY_SELLING_PRICE,\n    S.DISCOUNT_PER,\n    S.INVENTORY_UNITS,\n    S.INVENTORY_SERVICE_COSTS,\n    S.INVENTORY_RISK_COSTS,\n    S.STORAGE_COST,\n    S.INVENTORY_CARRYING_COST,\n    S.NO_OF_DAYS_OUT_OF_STOCK,\n    S.IN_OUT_STOCK,\n    S.INVENTORY_UPDATE_DATE,\n    S.ACCURATE_ORDER,\n    S.RETURN_FLAG,\n    S.DEFECTIVE_UNIT,\n    S.DEFECT_COUNT,\n    S.MODE_OF_ORDER,\n    S.ON_TIME_SHIPPING_FLAG,\n    S.ON_TIME_DELIVERY,\n    S.MODE_OF_SHIPPING,\n    S.PRODUCT_NAME,\n    S.PRODUCT_COMPONENT,\n    S.EOL_DATE,\n    S.SUPPLIER_NAME,\n    S.SUPPLIER_CITY,\n    S.SUPPLIER_STATE,\n    S.SUPPLIER_COUNTRY,\n    S.SUPPLIER_PHONE,\n    S.SUPPLIER_EMAIL,\n    S.SUPPLIER_RISK,\n    S.ROAD_TRANSPORT_COST,\n    S.SEA_TRANSPORT_COST,\n    S.AIR_TRANSPORT_COST,\n    S.CUSTOMER_NAME,\n    S.CUSTOMER_CITY,\n    S.CUSTOMER_STATE,\n    S.CUSTOMER_COUNTRY,\n    S.CUSTOMER_COUNTRY_CODE,\n    S.CUSTOMERSTATE_CODE,\n    S.CUSTOMER_PHONE,\n    S.CUSTOMER_EMAIL,\n    S.SHIPPING_FACTOR,\n    S.OTIF_FLAG,\n    S.LANDED_COST_PER_UNIT,\n    S.DSI_ESTIMATE,\n    S.GMROI,\n    S.ORDER_TO_CASH_CYCLE_DAYS,\n    S.RETURN_TO_SALES_RATIO,\n    S.LAST_MILE_EFFICIENCY,\n    S.STOCKOUT_RISK_SCORE,\n    S.CARBON_FOOTPRINT_EST,\n    S.CARRIER_LEAD_TIME_VARIANCE\n);",
+    "business": "CREATE TABLE IF NOT EXISTS AI_ETL.AI_ETL_BR.BR_ORDER_SUPPLY_AGG (\n    SUPPLIERID VARCHAR,\n    PRODUCTID VARCHAR,\n    TOTAL_SALES_QUANTITY NUMBER(38,0),\n    TOTAL_OTIF_ORDERS NUMBER(38,0),\n    AVG_LANDED_COST_PER_UNIT NUMBER(38,4),\n    AVG_DSI_ESTIMATE NUMBER(38,4),\n    AVG_GMROI NUMBER(38,4),\n    AVG_ORDER_TO_CASH_CYCLE_DAYS NUMBER(38,4),\n    AVG_RETURN_TO_SALES_RATIO NUMBER(38,6),\n    AVG_LAST_MILE_EFFICIENCY NUMBER(38,6),\n    AVG_STOCKOUT_RISK_SCORE NUMBER(38,6),\n    AVG_CARBON_FOOTPRINT_EST NUMBER(38,4),\n    AVG_CARRIER_LEAD_TIME_VARIANCE NUMBER(38,4)\n);\n\nMERGE INTO AI_ETL.AI_ETL_BR.BR_ORDER_SUPPLY_AGG AS T\nUSING (\n    SELECT\n        SUPPLIERID,\n        PRODUCTID,\n        SUM(SALES_QUANTITY) AS TOTAL_SALES_QUANTITY,\n        SUM(OTIF_FLAG) AS TOTAL_OTIF_ORDERS,\n        AVG(LANDED_COST_PER_UNIT) AS AVG_LANDED_COST_PER_UNIT,\n        AVG(DSI_ESTIMATE) AS AVG_DSI_ESTIMATE,\n        AVG(GMROI) AS AVG_GMROI,\n        AVG(ORDER_TO_CASH_CYCLE_DAYS) AS AVG_ORDER_TO_CASH_CYCLE_DAYS,\n        AVG(RETURN_TO_SALES_RATIO) AS AVG_RETURN_TO_SALES_RATIO,\n        AVG(LAST_MILE_EFFICIENCY) AS AVG_LAST_MILE_EFFICIENCY,\n        AVG(STOCKOUT_RISK_SCORE) AS AVG_STOCKOUT_RISK_SCORE,\n        AVG(CARBON_FOOTPRINT_EST) AS AVG_CARBON_FOOTPRINT_EST,\n        AVG(CARRIER_LEAD_TIME_VARIANCE) AS AVG_CARRIER_LEAD_TIME_VARIANCE\n    FROM AI_ETL.AI_ETL_WI.TRF_ORDER_SUPPLY_METRICS\n    GROUP BY SUPPLIERID, PRODUCTID\n) AS S\nON T.SUPPLIERID = S.SUPPLIERID\nAND T.PRODUCTID = S.PRODUCTID\nWHEN MATCHED THEN UPDATE SET\n    T.TOTAL_SALES_QUANTITY = S.TOTAL_SALES_QUANTITY,\n    T.TOTAL_OTIF_ORDERS = S.TOTAL_OTIF_ORDERS,\n    T.AVG_LANDED_COST_PER_UNIT = S.AVG_LANDED_COST_PER_UNIT,\n    T.AVG_DSI_ESTIMATE = S.AVG_DSI_ESTIMATE,\n    T.AVG_GMROI = S.AVG_GMROI,\n    T.AVG_ORDER_TO_CASH_CYCLE_DAYS = S.AVG_ORDER_TO_CASH_CYCLE_DAYS,\n    T.AVG_RETURN_TO_SALES_RATIO = S.AVG_RETURN_TO_SALES_RATIO,\n    T.AVG_LAST_MILE_EFFICIENCY = S.AVG_LAST_MILE_EFFICIENCY,\n    T.AVG_STOCKOUT_RISK_SCORE = S.AVG_STOCKOUT_RISK_SCORE,\n    T.AVG_CARBON_FOOTPRINT_EST = S.AVG_CARBON_FOOTPRINT_EST,\n    T.AVG_CARRIER_LEAD_TIME_VARIANCE = S.AVG_CARRIER_LEAD_TIME_VARIANCE\nWHEN NOT MATCHED THEN INSERT (\n    SUPPLIERID,\n    PRODUCTID,\n    TOTAL_SALES_QUANTITY,\n    TOTAL_OTIF_ORDERS,\n    AVG_LANDED_COST_PER_UNIT,\n    AVG_DSI_ESTIMATE,\n    AVG_GMROI,\n    AVG_ORDER_TO_CASH_CYCLE_DAYS,\n    AVG_RETURN_TO_SALES_RATIO,\n    AVG_LAST_MILE_EFFICIENCY,\n    AVG_STOCKOUT_RISK_SCORE,\n    AVG_CARBON_FOOTPRINT_EST,\n    AVG_CARRIER_LEAD_TIME_VARIANCE\n) VALUES (\n    S.SUPPLIERID,\n    S.PRODUCTID,\n    S.TOTAL_SALES_QUANTITY,\n    S.TOTAL_OTIF_ORDERS,\n    S.AVG_LANDED_COST_PER_UNIT,\n    S.AVG_DSI_ESTIMATE,\n    S.AVG_GMROI,\n    S.AVG_ORDER_TO_CASH_CYCLE_DAYS,\n    S.AVG_RETURN_TO_SALES_RATIO,\n    S.AVG_LAST_MILE_EFFICIENCY,\n    S.AVG_STOCKOUT_RISK_SCORE,\n    S.AVG_CARBON_FOOTPRINT_EST,\n    S.AVG_CARRIER_LEAD_TIME_VARIANCE\n);"
+  },
+  "last_updated": "2026-04-20T04:58:16.702128"
+}
