@@ -1,9 +1,4 @@
 .env
 venv
 AI_ETL_OpenAI_Output_20260319
-config/__pycache__
-execution/__pycache__
-generation/__pycache__
-llm/__pycache__
-snowflake_client/__pycache__
-ingestion/__pycache__
+**/__pycache__/
